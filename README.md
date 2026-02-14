@@ -81,7 +81,7 @@ Working examples for each language are in the `examples/` directory:
 
 | Language | Directory | Description |
 |---|---|---|
-| **C** | [`examples/c/`](examples/c/) | Static linking with `libservo_scraper.a` |
+| **C** | [`examples/c/`](examples/c/) | Dynamic linking with `libservo_scraper.dylib` |
 | **Python** | [`examples/python/`](examples/python/) | ctypes + shared library |
 | **JavaScript** | [`examples/js/`](examples/js/) | Node.js + koffi + shared library |
 | **Go** | [`examples/go/`](examples/go/) | CGo + shared library |

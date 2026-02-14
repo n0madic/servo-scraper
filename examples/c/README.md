@@ -1,6 +1,6 @@
 # C Example — servo-scraper FFI
 
-Statically links against `libservo_scraper.a` to take screenshots and capture HTML from C code.
+Links against `libservo_scraper.dylib` (macOS) / `.so` (Linux) to take screenshots and capture HTML from C code.
 
 ## Files
 
@@ -17,17 +17,16 @@ From the project root:
 make test-c
 ```
 
-This builds the Rust static library first, then compiles and links the C utility.
-
 Binary: `target/release/test_scraper`
 
 ## Usage
 
 ```bash
-./target/release/test_scraper <URL> <screenshot.png> <output.html>
+# macOS
+DYLD_LIBRARY_PATH=target/release ./target/release/test_scraper <URL> <screenshot.png> <output.html>
 
-# Example
-./target/release/test_scraper https://example.com /tmp/shot.png /tmp/page.html
+# Linux
+LD_LIBRARY_PATH=target/release ./target/release/test_scraper <URL> <screenshot.png> <output.html>
 ```
 
 ## API
@@ -86,9 +85,18 @@ scraper_free(s);
 
 ## Linking (manual)
 
-If not using `make test-c`, link manually on macOS:
+### Dynamic (shared library)
 
 ```bash
+cc -o test_scraper test_scraper.c -Iexamples/c -Ltarget/release -lservo_scraper
+```
+
+Requires `DYLD_LIBRARY_PATH` (macOS) or `LD_LIBRARY_PATH` (Linux) at runtime.
+
+### Static (self-contained binary)
+
+```bash
+# macOS
 cc -o test_scraper test_scraper.c -Iexamples/c \
     target/release/libservo_scraper.a \
     -framework AppKit -framework CoreFoundation -framework CoreGraphics \
@@ -97,3 +105,5 @@ cc -o test_scraper test_scraper.c -Iexamples/c \
     -framework SystemConfiguration \
     -lc++ -lresolv -lz -Wl,-no_fixup_chains
 ```
+
+No runtime library path needed — all Servo code is embedded in the binary.

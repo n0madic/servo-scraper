@@ -1,22 +1,4 @@
 RELEASE_DIR = target/release
-STATIC_LIB  = $(RELEASE_DIR)/libservo_scraper.a
-
-# macOS frameworks required by Servo
-FRAMEWORKS = -framework AppKit \
-             -framework CoreFoundation \
-             -framework CoreGraphics \
-             -framework CoreText \
-             -framework IOSurface \
-             -framework Metal \
-             -framework OpenGL \
-             -framework QuartzCore \
-             -framework Security \
-             -framework SystemConfiguration
-
-# -no_fixup_chains: required because SpiderMonkey C++ objects
-# contain unaligned pointers that Apple's new linker rejects
-LDFLAGS = $(STATIC_LIB) $(FRAMEWORKS) -lc++ -lresolv -lz \
-          -Wl,-no_fixup_chains
 
 .PHONY: build build-cli build-lib test-c test-python test-js test-go clean update-servo
 
@@ -32,12 +14,12 @@ build-cli:
 build-lib:
 	cargo build --release --lib
 
-# Build and link the C example against the static library
+# Build the C example against the shared library
 test-c: build-lib
 	cc -o $(RELEASE_DIR)/test_scraper \
 		examples/c/test_scraper.c \
 		-Iexamples/c \
-		$(LDFLAGS)
+		-L$(RELEASE_DIR) -lservo_scraper
 	@echo "Built: $(RELEASE_DIR)/test_scraper"
 
 # Verify the Python example can load the shared library
@@ -60,14 +42,16 @@ test-js: build-lib
 		const f = lib.func('void *scraper_new(uint32_t, uint32_t, uint64_t, double, int)'); \
 		console.log('Node.js: loaded libservo_scraper.dylib via koffi, FFI binding OK');"
 
-# Build and run the Go example against the shared library
+# Build the Go example against the shared library
 test-go: build-lib
 	CGO_ENABLED=1 go build -o $(RELEASE_DIR)/go_scraper ./examples/go/scraper.go
 	@echo "Built: $(RELEASE_DIR)/go_scraper"
 
+# Clean build artifacts
 clean:
 	cargo clean
 
+# Update the Servo submodule to the latest main branch commit
 update-servo:
 	git -C servo fetch origin
 	git -C servo checkout origin/main
