@@ -19,10 +19,7 @@ url = "2.5"
 log = "0.4"
 
 # Optimized for binary size (~55MB stripped).
-# Build: cargo build --profile release-small
-[profile.release-small]
-inherits = "release"
-debug-assertions = false
+[profile.release]
 lto = true
 codegen-units = 1
 opt-level = "z"
