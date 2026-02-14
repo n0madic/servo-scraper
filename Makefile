@@ -18,7 +18,7 @@ FRAMEWORKS = -framework AppKit \
 LDFLAGS = $(STATIC_LIB) $(FRAMEWORKS) -lc++ -lresolv -lz \
           -Wl,-no_fixup_chains
 
-.PHONY: build build-cli build-lib test-c test-python test-js clean update-servo
+.PHONY: build build-cli build-lib test-c test-python test-js test-go clean update-servo
 
 # Build everything (CLI binary + shared/static libraries)
 build:
@@ -59,6 +59,11 @@ test-js: build-lib
 		const lib = koffi.load('$(RELEASE_DIR)/libservo_scraper.dylib'); \
 		const f = lib.func('void *scraper_new(uint32_t, uint32_t, uint64_t, double, int)'); \
 		console.log('Node.js: loaded libservo_scraper.dylib via koffi, FFI binding OK');"
+
+# Build and run the Go example against the shared library
+test-go: build-lib
+	CGO_ENABLED=1 go build -o $(RELEASE_DIR)/go_scraper ./examples/go/scraper.go
+	@echo "Built: $(RELEASE_DIR)/go_scraper"
 
 clean:
 	cargo clean

@@ -2,7 +2,7 @@
 
 A minimal headless web scraper built on the [Servo](https://servo.org/) browser engine. Captures screenshots and/or HTML content from web pages with full JavaScript execution.
 
-Available as a **CLI tool** and a **library** with FFI bindings for C, Python, and JavaScript.
+Available as a **CLI tool** and a **library** with FFI bindings for C, Python, JavaScript, and Go.
 
 ## Features
 
@@ -36,6 +36,7 @@ make
 | C example | `make test-c` | `target/release/test_scraper` |
 | Python smoke test | `make test-python` | verifies FFI symbols |
 | JS smoke test | `make test-js` | verifies koffi binding |
+| Go example | `make test-go` | `target/release/go_scraper` |
 
 ### Build Artifacts
 
@@ -83,6 +84,7 @@ Working examples for each language are in the `examples/` directory:
 | **C** | [`examples/c/`](examples/c/) | Static linking with `libservo_scraper.a` |
 | **Python** | [`examples/python/`](examples/python/) | ctypes + shared library |
 | **JavaScript** | [`examples/js/`](examples/js/) | Node.js + koffi + shared library |
+| **Go** | [`examples/go/`](examples/go/) | CGo + shared library |
 
 Each directory has its own README with setup instructions and API reference.
 
@@ -96,6 +98,7 @@ examples/
   c/        — C header + test utility (static linking)
   python/   — ctypes example
   js/       — Node.js koffi example
+  go/       — CGo example
 ```
 
 The library has three layers:
