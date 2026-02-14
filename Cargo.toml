@@ -5,6 +5,11 @@ edition = "2024"
 rust-version = "1.86.0"
 license = "MPL-2.0"
 
+[lib]
+name = "servo_scraper"
+path = "src/lib.rs"
+crate-type = ["rlib", "cdylib", "staticlib"]
+
 [[bin]]
 name = "servo-scraper"
 path = "src/main.rs"
@@ -20,7 +25,6 @@ url = "2.5"
 log = "0.4"
 libc = "0.2"
 
-# Optimized for binary size (~55MB stripped).
 [profile.release]
 lto = true
 codegen-units = 1

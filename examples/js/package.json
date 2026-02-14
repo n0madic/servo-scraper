@@ -1,0 +1,13 @@
+{
+  "name": "servo-scraper-js-example",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Node.js FFI example for servo-scraper",
+  "scripts": {
+    "scrape": "node scraper.mjs"
+  },
+  "dependencies": {
+    "koffi": "^2.9"
+  }
+}
