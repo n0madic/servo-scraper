@@ -744,12 +744,14 @@ pub extern "C" fn scraper_new(
 }
 
 /// Destroy a scraper instance. Safe to call with NULL.
+///
+/// # Safety
+///
+/// `scraper` must be a valid pointer returned by `scraper_new()`, or NULL.
 #[unsafe(no_mangle)]
-pub extern "C" fn scraper_free(scraper: *mut Scraper) {
+pub unsafe extern "C" fn scraper_free(scraper: *mut Scraper) {
     if !scraper.is_null() {
-        unsafe {
-            drop(Box::from_raw(scraper));
-        }
+        unsafe { drop(Box::from_raw(scraper)) };
     }
 }
 
@@ -759,8 +761,13 @@ pub extern "C" fn scraper_free(scraper: *mut Scraper) {
 /// to its length. The caller must free it with `scraper_buffer_free()`.
 ///
 /// Returns `SCRAPER_OK` (0) on success, or an error code.
+///
+/// # Safety
+///
+/// All pointer arguments must be valid or NULL (NULL returns `SCRAPER_ERR_NULL_PTR`).
+/// `scraper` must have been returned by `scraper_new()`.
 #[unsafe(no_mangle)]
-pub extern "C" fn scraper_screenshot(
+pub unsafe extern "C" fn scraper_screenshot(
     scraper: *mut Scraper,
     url: *const std::ffi::c_char,
     out_data: *mut *mut u8,
@@ -799,8 +806,13 @@ pub extern "C" fn scraper_screenshot(
 /// The caller must free it with `scraper_string_free()`.
 ///
 /// Returns `SCRAPER_OK` (0) on success, or an error code.
+///
+/// # Safety
+///
+/// All pointer arguments must be valid or NULL (NULL returns `SCRAPER_ERR_NULL_PTR`).
+/// `scraper` must have been returned by `scraper_new()`.
 #[unsafe(no_mangle)]
-pub extern "C" fn scraper_html(
+pub unsafe extern "C" fn scraper_html(
     scraper: *mut Scraper,
     url: *const std::ffi::c_char,
     out_html: *mut *mut std::ffi::c_char,
@@ -838,8 +850,13 @@ pub extern "C" fn scraper_html(
 }
 
 /// Free a buffer returned by `scraper_screenshot()`. Safe to call with NULL.
+///
+/// # Safety
+///
+/// `data` must be a pointer returned by `scraper_screenshot()`, or NULL.
+/// `len` must be the length that was written to `*out_len`.
 #[unsafe(no_mangle)]
-pub extern "C" fn scraper_buffer_free(data: *mut u8, len: usize) {
+pub unsafe extern "C" fn scraper_buffer_free(data: *mut u8, len: usize) {
     if !data.is_null() && len > 0 {
         unsafe {
             let slice = std::slice::from_raw_parts_mut(data, len);
@@ -849,11 +866,13 @@ pub extern "C" fn scraper_buffer_free(data: *mut u8, len: usize) {
 }
 
 /// Free a string returned by `scraper_html()`. Safe to call with NULL.
+///
+/// # Safety
+///
+/// `s` must be a pointer returned by `scraper_html()`, or NULL.
 #[unsafe(no_mangle)]
-pub extern "C" fn scraper_string_free(s: *mut std::ffi::c_char) {
+pub unsafe extern "C" fn scraper_string_free(s: *mut std::ffi::c_char) {
     if !s.is_null() {
-        unsafe {
-            drop(std::ffi::CString::from_raw(s));
-        }
+        unsafe { drop(std::ffi::CString::from_raw(s)) };
     }
 }
