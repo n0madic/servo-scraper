@@ -13,10 +13,12 @@ path = "src/main.rs"
 libservo = { path = "servo/components/servo", default-features = false, features = ["js_jit"] }
 rustls = { version = "0.23", default-features = false, features = ["aws-lc-rs"] }
 image = { version = "0.25", default-features = false, features = ["png"] }
+bpaf = { version = "0.9", features = ["derive"] }
 dpi = "0.1"
 euclid = "0.22"
 url = "2.5"
 log = "0.4"
+libc = "0.2"
 
 # Optimized for binary size (~55MB stripped).
 [profile.release]
