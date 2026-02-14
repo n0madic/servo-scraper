@@ -1,0 +1,30 @@
+[package]
+name = "servo-scraper"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.86.0"
+license = "MPL-2.0"
+
+[[bin]]
+name = "servo-scraper"
+path = "src/main.rs"
+
+[dependencies]
+libservo = { path = "servo/components/servo", default-features = false, features = ["js_jit"] }
+rustls = { version = "0.23", default-features = false, features = ["aws-lc-rs"] }
+image = { version = "0.25", default-features = false, features = ["png"] }
+dpi = "0.1"
+euclid = "0.22"
+url = "2.5"
+log = "0.4"
+
+# Optimized for binary size (~55MB stripped).
+# Build: cargo build --profile release-small
+[profile.release-small]
+inherits = "release"
+debug-assertions = false
+lto = true
+codegen-units = 1
+opt-level = "z"
+strip = true
+panic = "abort"
