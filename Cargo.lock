@@ -6406,6 +6406,8 @@ dependencies = [
  "libservo",
  "log",
  "rustls",
+ "serde",
+ "serde_json",
  "url",
 ]
 

@@ -1,13 +1,20 @@
 # servo-scraper
 
-A minimal headless web scraper built on the [Servo](https://servo.org/) browser engine. Captures screenshots and/or HTML content from web pages with full JavaScript execution.
+A headless web scraper built on the [Servo](https://servo.org/) browser engine. Provides persistent page sessions with JavaScript evaluation, screenshots, HTML capture, input events, and wait mechanisms — a lightweight PhantomJS replacement.
 
 Available as a **CLI tool** and a **library** with FFI bindings for C, Python, JavaScript, and Go.
 
 ## Features
 
-- Full-page or viewport-only screenshots (PNG, JPG, BMP)
-- HTML capture via JS evaluation (`document.documentElement.outerHTML`)
+- **Persistent page sessions** — open a page, interact with it, capture results
+- **JavaScript evaluation** — run JS and get results as JSON
+- **Screenshots** — full-page or viewport-only (PNG, JPG, BMP)
+- **HTML capture** — via JS evaluation (`document.documentElement.outerHTML`)
+- **Wait mechanisms** — wait for CSS selectors, JS conditions, navigation, or fixed time
+- **Input events** — click (coordinates or CSS selector), type text, press keys, mouse move
+- **Console capture** — collect `console.log/warn/error` messages
+- **Network monitoring** — observe HTTP requests made during page load
+- **Dialog auto-dismiss** — alert/confirm/prompt dialogs are automatically handled
 - Configurable viewport size, load timeout, and post-load JS settle time
 - Software rendering — no GPU or display server required
 - C FFI with shared (`.dylib`/`.so`) and static (`.a`) libraries
@@ -21,7 +28,7 @@ Available as a **CLI tool** and a **library** with FFI bindings for C, Python, J
 ## Build
 
 ```bash
-git clone --recurse-submodules https://github.com/n0madic/servo-scraper.git
+git clone --recurse-submodules https://github.com/user/servo-scraper.git
 cd servo-scraper
 make
 ```
@@ -59,8 +66,14 @@ servo-scraper --fullpage --screenshot page.png https://example.com
 # HTML capture
 servo-scraper --html page.html https://example.com
 
-# Both + custom viewport
-servo-scraper --screenshot page.png --html page.html --width 1920 --height 1080 https://example.com
+# Evaluate JavaScript (result printed to stdout as JSON)
+servo-scraper --eval "document.title" https://example.com
+
+# Wait for a CSS selector before capturing
+servo-scraper --wait-for "h1" --screenshot page.png https://example.com
+
+# Combined
+servo-scraper --eval "document.title" --screenshot page.png --html page.html --width 1920 --height 1080 https://example.com
 ```
 
 ### Options
@@ -69,11 +82,88 @@ servo-scraper --screenshot page.png --html page.html --width 1920 --height 1080 
 |---|---|---|
 | `--screenshot <PATH>` | Save screenshot (png, jpg, bmp) | — |
 | `--html <PATH>` | Save page HTML | — |
+| `--eval <JS>` | Evaluate JS, print JSON result to stdout | — |
+| `--wait-for <SELECTOR>` | Wait for CSS selector before capturing | — |
 | `--fullpage` | Capture full scrollable page | off |
 | `--width <PX>` | Viewport width | 1280 |
 | `--height <PX>` | Viewport height | 720 |
 | `--timeout <SEC>` | Max page load wait | 30 |
 | `--wait <SEC>` | Post-load JS settle time | 2.0 |
+
+## Rust API
+
+```rust
+use servo_scraper::{PageEngine, ScraperOptions};
+
+// Layer 1: Single-threaded (for CLI / direct use)
+let mut engine = PageEngine::new(ScraperOptions::default()).unwrap();
+engine.open("https://example.com").unwrap();
+let title = engine.evaluate("document.title").unwrap();  // JSON string
+let html = engine.html().unwrap();
+let png = engine.screenshot().unwrap();
+
+// Wait for element, then click it
+engine.wait_for_selector("button#submit", 10).unwrap();
+engine.click_selector("button#submit").unwrap();
+
+// Type into a field
+engine.click_selector("input[name=search]").unwrap();
+engine.type_text("hello world").unwrap();
+engine.key_press("Enter").unwrap();
+```
+
+```rust
+use servo_scraper::{Page, ScraperOptions};
+
+// Layer 2: Thread-safe (for FFI / multi-threaded use)
+let page = Page::new(ScraperOptions::default()).unwrap();
+page.open("https://example.com").unwrap();
+let png = page.screenshot().unwrap();
+```
+
+## C FFI API
+
+All functions are prefixed with `page_`. See [`examples/c/servo_scraper.h`](examples/c/servo_scraper.h) for the full header.
+
+```c
+// Lifecycle
+ServoPage *page_new(width, height, timeout, wait, fullpage);
+void       page_free(ServoPage *page);
+
+// Navigation
+int page_open(page, url);
+
+// Capture
+int page_evaluate(page, script, &out_json, &out_len);
+int page_screenshot(page, &out_data, &out_len);
+int page_screenshot_fullpage(page, &out_data, &out_len);
+int page_html(page, &out_html, &out_len);
+
+// Page info
+int page_url(page, &out_url, &out_len);
+int page_title(page, &out_title, &out_len);
+
+// Events (JSON arrays)
+int page_console_messages(page, &out_json, &out_len);
+int page_network_requests(page, &out_json, &out_len);
+
+// Wait
+int page_wait_for_selector(page, selector, timeout_secs);
+int page_wait_for_condition(page, js_expr, timeout_secs);
+int page_wait(page, seconds);
+int page_wait_for_navigation(page, timeout_secs);
+
+// Input
+int page_click(page, x, y);
+int page_click_selector(page, selector);
+int page_type_text(page, text);
+int page_key_press(page, key_name);
+int page_mouse_move(page, x, y);
+
+// Memory
+void page_buffer_free(data, len);
+void page_string_free(s);
+```
 
 ## FFI Examples
 
@@ -86,16 +176,14 @@ Working examples for each language are in the `examples/` directory:
 | **JavaScript** | [`examples/js/`](examples/js/) | Node.js + koffi + shared library |
 | **Go** | [`examples/go/`](examples/go/) | CGo + shared library |
 
-Each directory has its own README with setup instructions and API reference.
-
 ## Architecture
 
 ```
 src/
-  lib.rs    — ScraperEngine (core) + Scraper (thread-safe) + C FFI
-  main.rs   — Thin CLI: bpaf args → ScraperEngine → file output
+  lib.rs    — PageEngine (core) + Page (thread-safe) + C FFI
+  main.rs   — CLI: bpaf args → PageEngine → file/stdout output
 examples/
-  c/        — C header + test utility (static linking)
+  c/        — C header + test utility
   python/   — ctypes example
   js/       — Node.js koffi example
   go/       — CGo example
@@ -103,9 +191,9 @@ examples/
 
 The library has three layers:
 
-1. **ScraperEngine** — single-threaded, zero-overhead core. CLI uses this directly.
-2. **Scraper** — thread-safe Rust wrapper (`Send + Sync`). Spawns a background Servo thread.
-3. **C FFI** — `extern "C"` functions wrapping Layer 2. Used by Python, JS, C, etc.
+1. **PageEngine** — single-threaded, zero-overhead core. CLI uses this directly. Owns a persistent WebView for interactive use.
+2. **Page** — thread-safe Rust wrapper (`Send + Sync`). Spawns a background Servo thread, communicates via channels.
+3. **C FFI** — `extern "C"` functions wrapping Layer 2. Used by Python, JS, C, Go, etc.
 
 ## Updating Servo
 

@@ -39,28 +39,36 @@ const ERROR_NAMES = {
   5: "SCREENSHOT_FAILED",
   6: "CHANNEL_CLOSED",
   7: "NULL_POINTER",
+  8: "NO_PAGE",
+  9: "SELECTOR_NOT_FOUND",
 };
 
 // Load library and define functions
 const lib = koffi.load(libPath);
 
 // Opaque pointer type
-const ServoScraper = koffi.pointer("ServoScraper", koffi.opaque());
+const ServoPage = koffi.pointer("ServoPage", koffi.opaque());
 
-const scraper_new = lib.func(
-  "ServoScraper *scraper_new(uint32_t width, uint32_t height, uint64_t timeout, double wait, int fullpage)",
+const page_new = lib.func(
+  "ServoPage *page_new(uint32_t width, uint32_t height, uint64_t timeout, double wait, int fullpage)",
 );
-const scraper_free = lib.func("void scraper_free(ServoScraper *scraper)");
-const scraper_screenshot = lib.func(
-  "int scraper_screenshot(ServoScraper *scraper, const char *url, _Out_ uint8_t **out_data, _Out_ size_t *out_len)",
+const page_free = lib.func("void page_free(ServoPage *page)");
+const page_open = lib.func(
+  "int page_open(ServoPage *page, const char *url)",
 );
-const scraper_html = lib.func(
-  "int scraper_html(ServoScraper *scraper, const char *url, _Out_ void **out_html, _Out_ size_t *out_len)",
+const page_evaluate = lib.func(
+  "int page_evaluate(ServoPage *page, const char *script, _Out_ void **out_json, _Out_ size_t *out_len)",
 );
-const scraper_buffer_free = lib.func(
-  "void scraper_buffer_free(void *data, size_t len)",
+const page_screenshot = lib.func(
+  "int page_screenshot(ServoPage *page, _Out_ uint8_t **out_data, _Out_ size_t *out_len)",
 );
-const scraper_string_free = lib.func("void scraper_string_free(void *s)");
+const page_html = lib.func(
+  "int page_html(ServoPage *page, _Out_ void **out_html, _Out_ size_t *out_len)",
+);
+const page_buffer_free = lib.func(
+  "void page_buffer_free(void *data, size_t len)",
+);
+const page_string_free = lib.func("void page_string_free(void *s)");
 
 // CLI
 if (process.argv.length < 5) {
@@ -74,50 +82,72 @@ if (process.argv.length < 5) {
 
 const [, , url, pngPath, htmlPath] = process.argv;
 
-// 1. Create scraper
-console.error("Creating scraper...");
-const scraper = scraper_new(1280, 720, 30, 2.0, 0);
-if (!scraper) {
-  console.error("Error: failed to create scraper");
+// 1. Create page
+console.error("Creating page...");
+const page = page_new(1280, 720, 30, 2.0, 0);
+if (!page) {
+  console.error("Error: failed to create page");
   process.exit(1);
 }
-console.error("Scraper created.");
+console.error("Page created.");
 
 try {
-  // 2. Take screenshot
-  console.error(`Taking screenshot of ${url}...`);
+  // 2. Open URL
+  console.error(`Opening ${url}...`);
+  let rc = page_open(page, url);
+  if (rc !== SCRAPER_OK) {
+    console.error(
+      `Error: page_open failed: ${ERROR_NAMES[rc] || "UNKNOWN"} (${rc})`,
+    );
+    process.exit(1);
+  }
+  console.error("Page loaded.");
+
+  // 3. Evaluate JS to get the title
+  const titlePtr = [null];
+  const titleLen = [0];
+  rc = page_evaluate(page, "document.title", titlePtr, titleLen);
+  if (rc === SCRAPER_OK) {
+    const rawBuf = koffi.decode(titlePtr[0], koffi.array("uint8_t", titleLen[0]));
+    page_string_free(titlePtr[0]);
+    const title = Buffer.from(rawBuf).toString("utf-8");
+    console.error(`Page title: ${title}`);
+  }
+
+  // 4. Take screenshot
+  console.error("Taking screenshot...");
   const pngDataPtr = [null];
   const pngLen = [0];
-  let rc = scraper_screenshot(scraper, url, pngDataPtr, pngLen);
+  rc = page_screenshot(page, pngDataPtr, pngLen);
   if (rc !== SCRAPER_OK) {
     console.error(
       `Error: screenshot failed: ${ERROR_NAMES[rc] || "UNKNOWN"} (${rc})`,
     );
   } else {
     const buf = koffi.decode(pngDataPtr[0], koffi.array("uint8_t", pngLen[0]));
-    scraper_buffer_free(pngDataPtr[0], pngLen[0]);
+    page_buffer_free(pngDataPtr[0], pngLen[0]);
     writeFileSync(pngPath, Buffer.from(buf));
     console.error(`Screenshot saved to ${pngPath} (${pngLen[0]} bytes)`);
   }
 
-  // 3. Capture HTML
-  console.error(`Capturing HTML of ${url}...`);
+  // 5. Capture HTML
+  console.error("Capturing HTML...");
   const htmlDataPtr = [null];
   const htmlLen = [0];
-  rc = scraper_html(scraper, url, htmlDataPtr, htmlLen);
+  rc = page_html(page, htmlDataPtr, htmlLen);
   if (rc !== SCRAPER_OK) {
     console.error(
       `Error: HTML capture failed: ${ERROR_NAMES[rc] || "UNKNOWN"} (${rc})`,
     );
   } else {
     const rawBuf = koffi.decode(htmlDataPtr[0], koffi.array("uint8_t", htmlLen[0]));
-    scraper_string_free(htmlDataPtr[0]);
+    page_string_free(htmlDataPtr[0]);
     const html = Buffer.from(rawBuf).toString("utf-8");
     writeFileSync(htmlPath, html);
     console.error(`HTML saved to ${htmlPath} (${htmlLen[0]} bytes)`);
   }
 } finally {
-  // 4. Cleanup
-  scraper_free(scraper);
+  // 6. Cleanup
+  page_free(page);
   console.error("Done.");
 }

@@ -3,7 +3,7 @@
  * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
 
 /**
- * Minimal C test for servo-scraper FFI.
+ * Minimal C test for servo-scraper Page FFI.
  *
  * Build:
  *   make test-c
@@ -20,15 +20,17 @@
 
 static const char *error_name(int code) {
     switch (code) {
-    case SCRAPER_OK:            return "OK";
-    case SCRAPER_ERR_INIT:      return "INIT_FAILED";
-    case SCRAPER_ERR_LOAD:      return "LOAD_FAILED";
-    case SCRAPER_ERR_TIMEOUT:   return "TIMEOUT";
-    case SCRAPER_ERR_JS:        return "JS_ERROR";
+    case SCRAPER_OK:             return "OK";
+    case SCRAPER_ERR_INIT:       return "INIT_FAILED";
+    case SCRAPER_ERR_LOAD:       return "LOAD_FAILED";
+    case SCRAPER_ERR_TIMEOUT:    return "TIMEOUT";
+    case SCRAPER_ERR_JS:         return "JS_ERROR";
     case SCRAPER_ERR_SCREENSHOT: return "SCREENSHOT_FAILED";
-    case SCRAPER_ERR_CHANNEL:   return "CHANNEL_CLOSED";
-    case SCRAPER_ERR_NULL_PTR:  return "NULL_POINTER";
-    default:                    return "UNKNOWN";
+    case SCRAPER_ERR_CHANNEL:    return "CHANNEL_CLOSED";
+    case SCRAPER_ERR_NULL_PTR:   return "NULL_POINTER";
+    case SCRAPER_ERR_NO_PAGE:    return "NO_PAGE";
+    case SCRAPER_ERR_SELECTOR:   return "SELECTOR_NOT_FOUND";
+    default:                     return "UNKNOWN";
     }
 }
 
@@ -47,20 +49,39 @@ int main(int argc, char *argv[]) {
     const char *png_path = argv[2];
     const char *html_path = argv[3];
 
-    /* 1. Create scraper (1280x720, 30s timeout, 2s settle, no fullpage) */
-    fprintf(stderr, "Creating scraper...\n");
-    ServoScraper *scraper = scraper_new(1280, 720, 30, 2.0, 0);
-    if (!scraper) {
-        fprintf(stderr, "Error: failed to create scraper\n");
+    /* 1. Create page (1280x720, 30s timeout, 2s settle, no fullpage) */
+    fprintf(stderr, "Creating page...\n");
+    ServoPage *page = page_new(1280, 720, 30, 2.0, 0);
+    if (!page) {
+        fprintf(stderr, "Error: failed to create page\n");
         return 1;
     }
-    fprintf(stderr, "Scraper created.\n");
+    fprintf(stderr, "Page created.\n");
 
-    /* 2. Take a screenshot */
-    fprintf(stderr, "Taking screenshot of %s...\n", url);
+    /* 2. Open URL */
+    fprintf(stderr, "Opening %s...\n", url);
+    int rc = page_open(page, url);
+    if (rc != SCRAPER_OK) {
+        fprintf(stderr, "Error: page_open failed: %s (%d)\n", error_name(rc), rc);
+        page_free(page);
+        return 1;
+    }
+    fprintf(stderr, "Page loaded.\n");
+
+    /* 3. Evaluate JS to get the title */
+    char *title_json = NULL;
+    size_t title_len = 0;
+    rc = page_evaluate(page, "document.title", &title_json, &title_len);
+    if (rc == SCRAPER_OK) {
+        fprintf(stderr, "Page title: %s\n", title_json);
+        page_string_free(title_json);
+    }
+
+    /* 4. Take a screenshot */
+    fprintf(stderr, "Taking screenshot...\n");
     uint8_t *png_data = NULL;
     size_t png_len = 0;
-    int rc = scraper_screenshot(scraper, url, &png_data, &png_len);
+    rc = page_screenshot(page, &png_data, &png_len);
     if (rc != SCRAPER_OK) {
         fprintf(stderr, "Error: screenshot failed: %s (%d)\n", error_name(rc), rc);
     } else {
@@ -72,14 +93,14 @@ int main(int argc, char *argv[]) {
         } else {
             fprintf(stderr, "Error: cannot open %s for writing\n", png_path);
         }
-        scraper_buffer_free(png_data, png_len);
+        page_buffer_free(png_data, png_len);
     }
 
-    /* 3. Capture HTML */
-    fprintf(stderr, "Capturing HTML of %s...\n", url);
+    /* 5. Capture HTML */
+    fprintf(stderr, "Capturing HTML...\n");
     char *html_data = NULL;
     size_t html_len = 0;
-    rc = scraper_html(scraper, url, &html_data, &html_len);
+    rc = page_html(page, &html_data, &html_len);
     if (rc != SCRAPER_OK) {
         fprintf(stderr, "Error: HTML capture failed: %s (%d)\n", error_name(rc), rc);
     } else {
@@ -91,11 +112,11 @@ int main(int argc, char *argv[]) {
         } else {
             fprintf(stderr, "Error: cannot open %s for writing\n", html_path);
         }
-        scraper_string_free(html_data);
+        page_string_free(html_data);
     }
 
-    /* 4. Cleanup */
-    scraper_free(scraper);
+    /* 6. Cleanup */
+    page_free(page);
     fprintf(stderr, "Done.\n");
     return 0;
 }

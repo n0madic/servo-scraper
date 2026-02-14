@@ -27,10 +27,12 @@ test-python: build-lib
 	python3 -c "\
 		import ctypes, sys; \
 		lib = ctypes.CDLL('$(RELEASE_DIR)/libservo_scraper.dylib'); \
-		assert lib.scraper_new, 'scraper_new not found'; \
-		assert lib.scraper_free, 'scraper_free not found'; \
-		assert lib.scraper_screenshot, 'scraper_screenshot not found'; \
-		assert lib.scraper_html, 'scraper_html not found'; \
+		assert lib.page_new, 'page_new not found'; \
+		assert lib.page_free, 'page_free not found'; \
+		assert lib.page_open, 'page_open not found'; \
+		assert lib.page_screenshot, 'page_screenshot not found'; \
+		assert lib.page_html, 'page_html not found'; \
+		assert lib.page_evaluate, 'page_evaluate not found'; \
 		print('Python: loaded libservo_scraper.dylib, all FFI symbols found')"
 
 # Install JS dependencies and verify the library can be loaded
@@ -39,7 +41,7 @@ test-js: build-lib
 	NODE_PATH=examples/js/node_modules node -e "\
 		const koffi = require('koffi'); \
 		const lib = koffi.load('$(RELEASE_DIR)/libservo_scraper.dylib'); \
-		const f = lib.func('void *scraper_new(uint32_t, uint32_t, uint64_t, double, int)'); \
+		const f = lib.func('void *page_new(uint32_t, uint32_t, uint64_t, double, int)'); \
 		console.log('Node.js: loaded libservo_scraper.dylib via koffi, FFI binding OK');"
 
 # Build the Go example against the shared library

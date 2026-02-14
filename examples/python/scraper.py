@@ -17,6 +17,7 @@ from ctypes import (
     POINTER,
     c_char_p,
     c_double,
+    c_float,
     c_int,
     c_size_t,
     c_uint8,
@@ -34,6 +35,8 @@ SCRAPER_ERR_JS = 4
 SCRAPER_ERR_SCREENSHOT = 5
 SCRAPER_ERR_CHANNEL = 6
 SCRAPER_ERR_NULL_PTR = 7
+SCRAPER_ERR_NO_PAGE = 8
+SCRAPER_ERR_SELECTOR = 9
 
 ERROR_NAMES = {
     SCRAPER_OK: "OK",
@@ -44,6 +47,8 @@ ERROR_NAMES = {
     SCRAPER_ERR_SCREENSHOT: "SCREENSHOT_FAILED",
     SCRAPER_ERR_CHANNEL: "CHANNEL_CLOSED",
     SCRAPER_ERR_NULL_PTR: "NULL_POINTER",
+    SCRAPER_ERR_NO_PAGE: "NO_PAGE",
+    SCRAPER_ERR_SELECTOR: "SELECTOR_NOT_FOUND",
 }
 
 
@@ -69,39 +74,93 @@ def load_library(lib_path):
     """Load the shared library and set up function signatures."""
     lib = ctypes.CDLL(lib_path)
 
-    # scraper_new(width, height, timeout, wait, fullpage) -> *ServoScraper
-    lib.scraper_new.restype = c_void_p
-    lib.scraper_new.argtypes = [c_uint32, c_uint32, c_uint64, c_double, c_int]
+    # page_new(width, height, timeout, wait, fullpage) -> *ServoPage
+    lib.page_new.restype = c_void_p
+    lib.page_new.argtypes = [c_uint32, c_uint32, c_uint64, c_double, c_int]
 
-    # scraper_free(scraper)
-    lib.scraper_free.restype = None
-    lib.scraper_free.argtypes = [c_void_p]
+    # page_free(page)
+    lib.page_free.restype = None
+    lib.page_free.argtypes = [c_void_p]
 
-    # scraper_screenshot(scraper, url, &data, &len) -> int
-    lib.scraper_screenshot.restype = c_int
-    lib.scraper_screenshot.argtypes = [
-        c_void_p,
-        c_char_p,
-        POINTER(POINTER(c_uint8)),
-        POINTER(c_size_t),
-    ]
+    # page_open(page, url) -> int
+    lib.page_open.restype = c_int
+    lib.page_open.argtypes = [c_void_p, c_char_p]
 
-    # scraper_html(scraper, url, &html, &len) -> int
-    lib.scraper_html.restype = c_int
-    lib.scraper_html.argtypes = [
-        c_void_p,
-        c_char_p,
-        POINTER(c_char_p),
-        POINTER(c_size_t),
-    ]
+    # page_evaluate(page, script, &json, &len) -> int
+    lib.page_evaluate.restype = c_int
+    lib.page_evaluate.argtypes = [c_void_p, c_char_p, POINTER(c_char_p), POINTER(c_size_t)]
 
-    # scraper_buffer_free(data, len)
-    lib.scraper_buffer_free.restype = None
-    lib.scraper_buffer_free.argtypes = [POINTER(c_uint8), c_size_t]
+    # page_screenshot(page, &data, &len) -> int
+    lib.page_screenshot.restype = c_int
+    lib.page_screenshot.argtypes = [c_void_p, POINTER(POINTER(c_uint8)), POINTER(c_size_t)]
 
-    # scraper_string_free(str)
-    lib.scraper_string_free.restype = None
-    lib.scraper_string_free.argtypes = [c_char_p]
+    # page_screenshot_fullpage(page, &data, &len) -> int
+    lib.page_screenshot_fullpage.restype = c_int
+    lib.page_screenshot_fullpage.argtypes = [c_void_p, POINTER(POINTER(c_uint8)), POINTER(c_size_t)]
+
+    # page_html(page, &html, &len) -> int
+    lib.page_html.restype = c_int
+    lib.page_html.argtypes = [c_void_p, POINTER(c_char_p), POINTER(c_size_t)]
+
+    # page_url(page, &url, &len) -> int
+    lib.page_url.restype = c_int
+    lib.page_url.argtypes = [c_void_p, POINTER(c_char_p), POINTER(c_size_t)]
+
+    # page_title(page, &title, &len) -> int
+    lib.page_title.restype = c_int
+    lib.page_title.argtypes = [c_void_p, POINTER(c_char_p), POINTER(c_size_t)]
+
+    # page_console_messages(page, &json, &len) -> int
+    lib.page_console_messages.restype = c_int
+    lib.page_console_messages.argtypes = [c_void_p, POINTER(c_char_p), POINTER(c_size_t)]
+
+    # page_network_requests(page, &json, &len) -> int
+    lib.page_network_requests.restype = c_int
+    lib.page_network_requests.argtypes = [c_void_p, POINTER(c_char_p), POINTER(c_size_t)]
+
+    # page_wait_for_selector(page, selector, timeout) -> int
+    lib.page_wait_for_selector.restype = c_int
+    lib.page_wait_for_selector.argtypes = [c_void_p, c_char_p, c_uint64]
+
+    # page_wait_for_condition(page, js_expr, timeout) -> int
+    lib.page_wait_for_condition.restype = c_int
+    lib.page_wait_for_condition.argtypes = [c_void_p, c_char_p, c_uint64]
+
+    # page_wait(page, seconds) -> int
+    lib.page_wait.restype = c_int
+    lib.page_wait.argtypes = [c_void_p, c_double]
+
+    # page_wait_for_navigation(page, timeout) -> int
+    lib.page_wait_for_navigation.restype = c_int
+    lib.page_wait_for_navigation.argtypes = [c_void_p, c_uint64]
+
+    # page_click(page, x, y) -> int
+    lib.page_click.restype = c_int
+    lib.page_click.argtypes = [c_void_p, c_float, c_float]
+
+    # page_click_selector(page, selector) -> int
+    lib.page_click_selector.restype = c_int
+    lib.page_click_selector.argtypes = [c_void_p, c_char_p]
+
+    # page_type_text(page, text) -> int
+    lib.page_type_text.restype = c_int
+    lib.page_type_text.argtypes = [c_void_p, c_char_p]
+
+    # page_key_press(page, key_name) -> int
+    lib.page_key_press.restype = c_int
+    lib.page_key_press.argtypes = [c_void_p, c_char_p]
+
+    # page_mouse_move(page, x, y) -> int
+    lib.page_mouse_move.restype = c_int
+    lib.page_mouse_move.argtypes = [c_void_p, c_float, c_float]
+
+    # page_buffer_free(data, len)
+    lib.page_buffer_free.restype = None
+    lib.page_buffer_free.argtypes = [POINTER(c_uint8), c_size_t]
+
+    # page_string_free(str)
+    lib.page_string_free.restype = None
+    lib.page_string_free.argtypes = [c_char_p]
 
     return lib
 
@@ -124,38 +183,57 @@ def main():
     lib_path = find_library()
     lib = load_library(lib_path)
 
-    # 1. Create scraper
-    print("Creating scraper...", file=sys.stderr)
-    scraper = lib.scraper_new(1280, 720, 30, 2.0, 0)
-    if not scraper:
-        print("Error: failed to create scraper", file=sys.stderr)
+    # 1. Create page
+    print("Creating page...", file=sys.stderr)
+    page = lib.page_new(1280, 720, 30, 2.0, 0)
+    if not page:
+        print("Error: failed to create page", file=sys.stderr)
         sys.exit(1)
-    print("Scraper created.", file=sys.stderr)
+    print("Page created.", file=sys.stderr)
 
     try:
-        # 2. Take screenshot
-        print(f"Taking screenshot of {sys.argv[1]}...", file=sys.stderr)
+        # 2. Open URL
+        print(f"Opening {sys.argv[1]}...", file=sys.stderr)
+        rc = lib.page_open(page, url)
+        if rc != SCRAPER_OK:
+            print(
+                f"Error: page_open failed: {ERROR_NAMES.get(rc, 'UNKNOWN')} ({rc})",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+        print("Page loaded.", file=sys.stderr)
+
+        # 3. Evaluate JS to get the title
+        title_data = c_char_p()
+        title_len = c_size_t(0)
+        rc = lib.page_evaluate(page, b"document.title", ctypes.byref(title_data), ctypes.byref(title_len))
+        if rc == SCRAPER_OK:
+            title = title_data.value[:title_len.value].decode("utf-8", errors="replace")
+            lib.page_string_free(title_data)
+            print(f"Page title: {title}", file=sys.stderr)
+
+        # 4. Take screenshot
+        print("Taking screenshot...", file=sys.stderr)
         png_data = POINTER(c_uint8)()
         png_len = c_size_t(0)
-        rc = lib.scraper_screenshot(scraper, url, ctypes.byref(png_data), ctypes.byref(png_len))
+        rc = lib.page_screenshot(page, ctypes.byref(png_data), ctypes.byref(png_len))
         if rc != SCRAPER_OK:
             print(
                 f"Error: screenshot failed: {ERROR_NAMES.get(rc, 'UNKNOWN')} ({rc})",
                 file=sys.stderr,
             )
         else:
-            # Copy data before freeing
             data = bytes(png_data[: png_len.value])
-            lib.scraper_buffer_free(png_data, png_len)
+            lib.page_buffer_free(png_data, png_len)
             with open(png_path, "wb") as f:
                 f.write(data)
             print(f"Screenshot saved to {png_path} ({len(data)} bytes)", file=sys.stderr)
 
-        # 3. Capture HTML
-        print(f"Capturing HTML of {sys.argv[1]}...", file=sys.stderr)
+        # 5. Capture HTML
+        print("Capturing HTML...", file=sys.stderr)
         html_data = c_char_p()
         html_len = c_size_t(0)
-        rc = lib.scraper_html(scraper, url, ctypes.byref(html_data), ctypes.byref(html_len))
+        rc = lib.page_html(page, ctypes.byref(html_data), ctypes.byref(html_len))
         if rc != SCRAPER_OK:
             print(
                 f"Error: HTML capture failed: {ERROR_NAMES.get(rc, 'UNKNOWN')} ({rc})",
@@ -163,14 +241,14 @@ def main():
             )
         else:
             html = html_data.value[: html_len.value].decode("utf-8", errors="replace")
-            lib.scraper_string_free(html_data)
+            lib.page_string_free(html_data)
             with open(html_path, "w") as f:
                 f.write(html)
             print(f"HTML saved to {html_path} ({len(html)} bytes)", file=sys.stderr)
 
     finally:
-        # 4. Cleanup
-        lib.scraper_free(scraper)
+        # 6. Cleanup
+        lib.page_free(page)
         print("Done.", file=sys.stderr)
 
 
