@@ -10,6 +10,7 @@
 //! servo-scraper --screenshot page.png https://example.com
 //! servo-scraper --html page.html https://example.com
 //! servo-scraper --eval "document.title" https://example.com
+//! servo-scraper --eval-file script.js https://example.com
 //! servo-scraper --wait-for "h1" --screenshot page.png https://example.com
 //! ```
 
@@ -39,6 +40,10 @@ struct CliConfig {
     /// Evaluate JavaScript and print result (JSON) to stdout
     #[bpaf(long, argument("JS"))]
     eval: Option<String>,
+
+    /// Evaluate JavaScript from a file and print result (JSON) to stdout
+    #[bpaf(long("eval-file"), argument("PATH"))]
+    eval_file: Option<String>,
 
     /// Wait for a CSS selector before capturing
     #[bpaf(long("wait-for"), argument("SELECTOR"))]
@@ -80,8 +85,14 @@ fn parse_url(s: String) -> Result<Url, String> {
 fn main() {
     let config = cli_config().run();
 
-    if config.screenshot.is_none() && config.html.is_none() && config.eval.is_none() {
-        eprintln!("Error: at least one of --screenshot, --html, or --eval must be specified");
+    if config.screenshot.is_none()
+        && config.html.is_none()
+        && config.eval.is_none()
+        && config.eval_file.is_none()
+    {
+        eprintln!(
+            "Error: at least one of --screenshot, --html, --eval, or --eval-file must be specified"
+        );
         process::exit(1);
     }
 
@@ -124,6 +135,21 @@ fn main() {
     // Evaluate JS if specified.
     if let Some(ref script) = config.eval {
         match engine.evaluate(script) {
+            Ok(json) => println!("{json}"),
+            Err(e) => {
+                eprintln!("Error: JS evaluation failed: {e}");
+                process::exit(1);
+            }
+        }
+    }
+
+    // Evaluate JS from file if specified.
+    if let Some(ref path) = config.eval_file {
+        let script = std::fs::read_to_string(path).unwrap_or_else(|e| {
+            eprintln!("Error: failed to read JS file {path}: {e}");
+            process::exit(1);
+        });
+        match engine.evaluate(&script) {
             Ok(json) => println!("{json}"),
             Err(e) => {
                 eprintln!("Error: JS evaluation failed: {e}");

@@ -36,6 +36,7 @@ There are no unit tests or integration test suites — the "tests" are FFI smoke
 ./target/release/servo-scraper --html page.html --width 1920 --height 1080 https://example.com
 ./target/release/servo-scraper --fullpage --screenshot full.png --html page.html https://example.com
 ./target/release/servo-scraper --eval "document.title" https://example.com
+./target/release/servo-scraper --eval-file script.js https://example.com
 ./target/release/servo-scraper --wait-for "h1" --screenshot page.png https://example.com
 ```
 

@@ -69,6 +69,9 @@ servo-scraper --html page.html https://example.com
 # Evaluate JavaScript (result printed to stdout as JSON)
 servo-scraper --eval "document.title" https://example.com
 
+# Evaluate JavaScript from a file
+servo-scraper --eval-file script.js https://example.com
+
 # Wait for a CSS selector before capturing
 servo-scraper --wait-for "h1" --screenshot page.png https://example.com
 
@@ -83,6 +86,7 @@ servo-scraper --eval "document.title" --screenshot page.png --html page.html --w
 | `--screenshot <PATH>` | Save screenshot (png, jpg, bmp) | — |
 | `--html <PATH>` | Save page HTML | — |
 | `--eval <JS>` | Evaluate JS, print JSON result to stdout | — |
+| `--eval-file <PATH>` | Evaluate JS from a file, print JSON result to stdout | — |
 | `--wait-for <SELECTOR>` | Wait for CSS selector before capturing | — |
 | `--fullpage` | Capture full scrollable page | off |
 | `--width <PX>` | Viewport width | 1280 |
