@@ -20,11 +20,13 @@ use servo::{
     KeyState, KeyboardEvent, LoadStatus, MouseButton, MouseButtonAction, MouseButtonEvent,
     MouseMoveEvent, NamedKey, Preferences, RenderingContext, Servo, ServoBuilder, SimpleDialog,
     SoftwareRenderingContext, WebResourceLoad, WebResourceResponse, WebView, WebViewBuilder,
-    WebViewDelegate, WebViewPoint,
+    WebViewDelegate, WebViewPoint, WheelDelta, WheelEvent, WheelMode,
 };
 use url::Url;
 
-use crate::types::{ConsoleMessage, ElementRect, NetworkRequest, PageError, PageOptions};
+use crate::types::{
+    ConsoleMessage, ElementRect, InputFile, NetworkRequest, PageError, PageOptions,
+};
 
 // ---------------------------------------------------------------------------
 // Internal: Suppress stderr from system libraries
@@ -887,6 +889,174 @@ impl PageEngine {
             Duration::from_secs(2),
         );
         Ok(())
+    }
+
+    // -- Scroll --
+
+    /// Scroll the viewport by the given pixel deltas using a native wheel event.
+    pub fn scroll(&self, delta_x: f64, delta_y: f64) -> Result<(), PageError> {
+        let webview = self.webview()?;
+        let center = WebViewPoint::from(DevicePoint::new(
+            self.options.width as f32 / 2.0,
+            self.options.height as f32 / 2.0,
+        ));
+        // Servo's WheelDelta convention: positive y = scroll up (content moves down).
+        // We negate so our API uses the intuitive convention: positive y = scroll down.
+        let delta = WheelDelta {
+            x: -delta_x,
+            y: -delta_y,
+            z: 0.0,
+            mode: WheelMode::DeltaPixel,
+        };
+        webview.notify_input_event(InputEvent::Wheel(WheelEvent::new(delta, center)));
+        wait_for_frame(
+            &self.servo,
+            &self.event_loop,
+            &self.delegate,
+            Duration::from_secs(2),
+        );
+        wait_for_idle(
+            &self.servo,
+            &self.event_loop,
+            &self.delegate,
+            Duration::from_millis(200),
+            Duration::from_secs(2),
+        );
+        Ok(())
+    }
+
+    /// Scroll the element matching a CSS selector into view.
+    pub fn scroll_to_selector(&self, selector: &str) -> Result<(), PageError> {
+        let webview = self.webview()?;
+        let escaped = selector.replace('\\', "\\\\").replace('\'', "\\'");
+        let js = format!(
+            "(function() {{ \
+                var el = document.querySelector('{escaped}'); \
+                if (!el) return null; \
+                el.scrollIntoView({{behavior: 'instant', block: 'center'}}); \
+                return true; \
+            }})()"
+        );
+        match eval_js(
+            &self.servo,
+            &self.event_loop,
+            webview,
+            &js,
+            self.options.timeout,
+        )? {
+            JSValue::Boolean(true) => {
+                wait_for_frame(
+                    &self.servo,
+                    &self.event_loop,
+                    &self.delegate,
+                    Duration::from_secs(2),
+                );
+                Ok(())
+            }
+            JSValue::Null | JSValue::Undefined => Err(PageError::SelectorNotFound(selector.into())),
+            other => Err(PageError::JsError(format!(
+                "unexpected scrollIntoView result: {other:?}"
+            ))),
+        }
+    }
+
+    // -- Select --
+
+    /// Select an option in a `<select>` element by value.
+    pub fn select_option(&self, selector: &str, value: &str) -> Result<(), PageError> {
+        let webview = self.webview()?;
+        let esc_sel = selector.replace('\\', "\\\\").replace('\'', "\\'");
+        let esc_val = value.replace('\\', "\\\\").replace('\'', "\\'");
+        let js = format!(
+            "(function() {{ \
+                var el = document.querySelector('{esc_sel}'); \
+                if (!el) return 'not_found'; \
+                if (el.tagName !== 'SELECT') return 'not_select'; \
+                var opt = Array.from(el.options).find(function(o) {{ return o.value === '{esc_val}'; }}); \
+                if (!opt) return 'no_option'; \
+                el.value = '{esc_val}'; \
+                el.dispatchEvent(new Event('input', {{bubbles: true}})); \
+                el.dispatchEvent(new Event('change', {{bubbles: true}})); \
+                return 'ok'; \
+            }})()"
+        );
+        match eval_js(
+            &self.servo,
+            &self.event_loop,
+            webview,
+            &js,
+            self.options.timeout,
+        )? {
+            JSValue::String(s) if s == "ok" => Ok(()),
+            JSValue::String(s) if s == "not_found" => {
+                Err(PageError::SelectorNotFound(selector.into()))
+            }
+            JSValue::String(s) if s == "not_select" => Err(PageError::JsError(format!(
+                "element '{selector}' is not a <select>"
+            ))),
+            JSValue::String(s) if s == "no_option" => Err(PageError::JsError(format!(
+                "no option with value '{value}' in '{selector}'"
+            ))),
+            other => Err(PageError::JsError(format!(
+                "unexpected select result: {other:?}"
+            ))),
+        }
+    }
+
+    // -- File upload --
+
+    /// Set files on an `<input type="file">` element using the DataTransfer API.
+    pub fn set_input_files(&self, selector: &str, files: &[InputFile]) -> Result<(), PageError> {
+        let webview = self.webview()?;
+        let esc_sel = selector.replace('\\', "\\\\").replace('\'', "\\'");
+
+        use base64::Engine as _;
+        let file_entries: Vec<String> = files
+            .iter()
+            .map(|f| {
+                let b64 = base64::engine::general_purpose::STANDARD.encode(&f.data);
+                let esc_name = f.name.replace('\\', "\\\\").replace('\'', "\\'");
+                let esc_mime = f.mime_type.replace('\\', "\\\\").replace('\'', "\\'");
+                format!("{{name:'{esc_name}',mime:'{esc_mime}',b64:'{b64}'}}")
+            })
+            .collect();
+        let files_js = file_entries.join(",");
+
+        let js = format!(
+            "(function() {{ \
+                var input = document.querySelector('{esc_sel}'); \
+                if (!input) return 'not_found'; \
+                if (input.type !== 'file') return 'not_file'; \
+                var dt = new DataTransfer(); \
+                var files = [{files_js}]; \
+                for (var i = 0; i < files.length; i++) {{ \
+                    var f = files[i]; \
+                    var bytes = Uint8Array.from(atob(f.b64), function(c) {{ return c.charCodeAt(0); }}); \
+                    dt.items.add(new File([bytes], f.name, {{type: f.mime}})); \
+                }} \
+                input.files = dt.files; \
+                input.dispatchEvent(new Event('change', {{bubbles: true}})); \
+                return 'ok'; \
+            }})()"
+        );
+        match eval_js(
+            &self.servo,
+            &self.event_loop,
+            webview,
+            &js,
+            self.options.timeout,
+        )? {
+            JSValue::String(s) if s == "ok" => Ok(()),
+            JSValue::String(s) if s == "not_found" => {
+                Err(PageError::SelectorNotFound(selector.into()))
+            }
+            JSValue::String(s) if s == "not_file" => Err(PageError::JsError(format!(
+                "element '{selector}' is not an <input type=\"file\">"
+            ))),
+            other => Err(PageError::JsError(format!(
+                "unexpected file input result: {other:?}"
+            ))),
+        }
     }
 
     // -- Cookies (JS-based) --

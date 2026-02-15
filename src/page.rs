@@ -9,7 +9,9 @@ use std::sync::mpsc;
 use std::thread;
 
 use crate::engine::PageEngine;
-use crate::types::{ConsoleMessage, ElementRect, NetworkRequest, PageError, PageOptions};
+use crate::types::{
+    ConsoleMessage, ElementRect, InputFile, NetworkRequest, PageError, PageOptions,
+};
 
 /// Commands sent from the `Page` handle to the background thread.
 enum Command {
@@ -88,6 +90,28 @@ enum Command {
     MouseMove {
         x: f32,
         y: f32,
+        response: mpsc::Sender<Result<(), PageError>>,
+    },
+    // Scroll
+    Scroll {
+        delta_x: f64,
+        delta_y: f64,
+        response: mpsc::Sender<Result<(), PageError>>,
+    },
+    ScrollToSelector {
+        selector: String,
+        response: mpsc::Sender<Result<(), PageError>>,
+    },
+    // Select
+    SelectOption {
+        selector: String,
+        value: String,
+        response: mpsc::Sender<Result<(), PageError>>,
+    },
+    // File upload
+    SetInputFiles {
+        selector: String,
+        files: Vec<InputFile>,
         response: mpsc::Sender<Result<(), PageError>>,
     },
     // Cookies
@@ -242,6 +266,30 @@ impl Page {
                     }
                     Command::MouseMove { x, y, response } => {
                         let _ = response.send(engine.mouse_move(x, y));
+                    }
+                    Command::Scroll {
+                        delta_x,
+                        delta_y,
+                        response,
+                    } => {
+                        let _ = response.send(engine.scroll(delta_x, delta_y));
+                    }
+                    Command::ScrollToSelector { selector, response } => {
+                        let _ = response.send(engine.scroll_to_selector(&selector));
+                    }
+                    Command::SelectOption {
+                        selector,
+                        value,
+                        response,
+                    } => {
+                        let _ = response.send(engine.select_option(&selector, &value));
+                    }
+                    Command::SetInputFiles {
+                        selector,
+                        files,
+                        response,
+                    } => {
+                        let _ = response.send(engine.set_input_files(&selector, &files));
                     }
                     Command::GetCookies { response } => {
                         let _ = response.send(engine.get_cookies());
@@ -420,6 +468,37 @@ impl Page {
 
     pub fn mouse_move(&self, x: f32, y: f32) -> Result<(), PageError> {
         self.send_cmd(|response| Command::MouseMove { x, y, response })?
+    }
+
+    pub fn scroll(&self, delta_x: f64, delta_y: f64) -> Result<(), PageError> {
+        self.send_cmd(|response| Command::Scroll {
+            delta_x,
+            delta_y,
+            response,
+        })?
+    }
+
+    pub fn scroll_to_selector(&self, selector: &str) -> Result<(), PageError> {
+        self.send_cmd(|response| Command::ScrollToSelector {
+            selector: selector.to_string(),
+            response,
+        })?
+    }
+
+    pub fn select_option(&self, selector: &str, value: &str) -> Result<(), PageError> {
+        self.send_cmd(|response| Command::SelectOption {
+            selector: selector.to_string(),
+            value: value.to_string(),
+            response,
+        })?
+    }
+
+    pub fn set_input_files(&self, selector: &str, files: Vec<InputFile>) -> Result<(), PageError> {
+        self.send_cmd(|response| Command::SetInputFiles {
+            selector: selector.to_string(),
+            files,
+            response,
+        })?
     }
 
     pub fn get_cookies(&self) -> Result<String, PageError> {

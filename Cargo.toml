@@ -26,6 +26,7 @@ euclid = "0.22"
 url = "2.5"
 log = "0.4"
 libc = "0.2"
+base64 = "0.22"
 
 [profile.release]
 lto = true

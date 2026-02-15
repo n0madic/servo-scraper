@@ -5,7 +5,7 @@
 //! Layer 3: C FFI — `extern "C"` functions wrapping [`Page`](crate::Page).
 
 use crate::page::Page;
-use crate::types::{PageError, PageOptions};
+use crate::types::{InputFile, PageError, PageOptions};
 
 const PAGE_OK: i32 = 0;
 const PAGE_ERR_INIT: i32 = 1;
@@ -575,6 +575,156 @@ pub unsafe extern "C" fn page_mouse_move(page: *mut Page, x: f32, y: f32) -> i32
     }
     let page = unsafe { &*page };
     match page.mouse_move(x, y) {
+        Ok(()) => PAGE_OK,
+        Err(e) => error_code(&e),
+    }
+}
+
+// -- Scroll FFI --
+
+/// Scroll the viewport by the given pixel deltas.
+///
+/// # Safety
+///
+/// `page` must be a valid pointer.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn page_scroll(page: *mut Page, delta_x: f64, delta_y: f64) -> i32 {
+    if page.is_null() {
+        return PAGE_ERR_NULL_PTR;
+    }
+    let page = unsafe { &*page };
+    match page.scroll(delta_x, delta_y) {
+        Ok(()) => PAGE_OK,
+        Err(e) => error_code(&e),
+    }
+}
+
+/// Scroll an element matching a CSS selector into view.
+///
+/// # Safety
+///
+/// `page` and `selector` must be valid pointers.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn page_scroll_to_selector(
+    page: *mut Page,
+    selector: *const std::ffi::c_char,
+) -> i32 {
+    if page.is_null() || selector.is_null() {
+        return PAGE_ERR_NULL_PTR;
+    }
+    let page = unsafe { &*page };
+    let sel = match unsafe { std::ffi::CStr::from_ptr(selector) }.to_str() {
+        Ok(s) => s,
+        Err(_) => return PAGE_ERR_JS,
+    };
+    match page.scroll_to_selector(sel) {
+        Ok(()) => PAGE_OK,
+        Err(e) => error_code(&e),
+    }
+}
+
+// -- Select FFI --
+
+/// Select an option in a `<select>` element by value.
+///
+/// # Safety
+///
+/// `page`, `selector`, and `value` must be valid pointers.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn page_select_option(
+    page: *mut Page,
+    selector: *const std::ffi::c_char,
+    value: *const std::ffi::c_char,
+) -> i32 {
+    if page.is_null() || selector.is_null() || value.is_null() {
+        return PAGE_ERR_NULL_PTR;
+    }
+    let page = unsafe { &*page };
+    let sel = match unsafe { std::ffi::CStr::from_ptr(selector) }.to_str() {
+        Ok(s) => s,
+        Err(_) => return PAGE_ERR_JS,
+    };
+    let val = match unsafe { std::ffi::CStr::from_ptr(value) }.to_str() {
+        Ok(s) => s,
+        Err(_) => return PAGE_ERR_JS,
+    };
+    match page.select_option(sel, val) {
+        Ok(()) => PAGE_OK,
+        Err(e) => error_code(&e),
+    }
+}
+
+// -- File upload FFI --
+
+/// Set files on an `<input type="file">` element.
+///
+/// `paths` is a comma-separated list of file paths. Each file is read from disk,
+/// its MIME type inferred from the extension, and injected via the DataTransfer API.
+///
+/// # Safety
+///
+/// `page`, `selector`, and `paths` must be valid pointers.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn page_set_input_files(
+    page: *mut Page,
+    selector: *const std::ffi::c_char,
+    paths: *const std::ffi::c_char,
+) -> i32 {
+    if page.is_null() || selector.is_null() || paths.is_null() {
+        return PAGE_ERR_NULL_PTR;
+    }
+    let page = unsafe { &*page };
+    let sel = match unsafe { std::ffi::CStr::from_ptr(selector) }.to_str() {
+        Ok(s) => s,
+        Err(_) => return PAGE_ERR_JS,
+    };
+    let paths_str = match unsafe { std::ffi::CStr::from_ptr(paths) }.to_str() {
+        Ok(s) => s,
+        Err(_) => return PAGE_ERR_JS,
+    };
+
+    let mut files = Vec::new();
+    for path_str in paths_str
+        .split(',')
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+    {
+        let path = std::path::Path::new(path_str);
+        let data = match std::fs::read(path) {
+            Ok(d) => d,
+            Err(_) => return PAGE_ERR_JS,
+        };
+        let name = path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("file")
+            .to_string();
+        let mime_type = match path.extension().and_then(|e| e.to_str()) {
+            Some("txt") => "text/plain",
+            Some("html") | Some("htm") => "text/html",
+            Some("css") => "text/css",
+            Some("js") => "application/javascript",
+            Some("json") => "application/json",
+            Some("xml") => "application/xml",
+            Some("pdf") => "application/pdf",
+            Some("png") => "image/png",
+            Some("jpg") | Some("jpeg") => "image/jpeg",
+            Some("gif") => "image/gif",
+            Some("svg") => "image/svg+xml",
+            Some("webp") => "image/webp",
+            Some("zip") => "application/zip",
+            Some("csv") => "text/csv",
+            _ => "application/octet-stream",
+        }
+        .to_string();
+        files.push(InputFile {
+            name,
+            mime_type,
+            data,
+        });
+    }
+
+    match page.set_input_files(sel, files) {
         Ok(()) => PAGE_OK,
         Err(e) => error_code(&e),
     }

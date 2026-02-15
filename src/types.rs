@@ -99,3 +99,10 @@ impl fmt::Display for PageError {
 }
 
 impl std::error::Error for PageError {}
+
+/// A file to inject into an `<input type="file">` element.
+pub struct InputFile {
+    pub name: String,
+    pub mime_type: String,
+    pub data: Vec<u8>,
+}

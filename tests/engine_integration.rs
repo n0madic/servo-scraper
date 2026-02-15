@@ -12,7 +12,7 @@
 //! `page.close()` first to reset state (drop the WebView), then `page.open()`
 //! as needed.
 
-use servo_scraper::{Page, PageError, PageOptions};
+use servo_scraper::{InputFile, Page, PageError, PageOptions};
 use std::sync::OnceLock;
 use std::time::Instant;
 
@@ -72,6 +72,40 @@ const CONDITION_HTML: &str = "\
 <script>\
 window.ready = false;\
 setTimeout(function() { window.ready = true; }, 500);\
+</script>\
+</body></html>";
+
+const SCROLL_HTML: &str = "\
+<html><head><title>Scroll Page</title></head><body>\
+<div id=\"top\" style=\"height:50px;background:red;\">Top</div>\
+<div style=\"height:3000px;background:linear-gradient(white,gray);\">Filler</div>\
+<div id=\"bottom\" style=\"height:50px;background:blue;\">Bottom</div>\
+</body></html>";
+
+const SELECT_HTML: &str = "\
+<html><head><title>Select Page</title></head><body>\
+<select id=\"color\">\
+<option value=\"red\">Red</option>\
+<option value=\"green\">Green</option>\
+<option value=\"blue\">Blue</option>\
+</select>\
+<span id=\"selected\">none</span>\
+<script>\
+document.getElementById('color').addEventListener('change', function() {\
+  document.getElementById('selected').textContent = this.value;\
+});\
+</script>\
+</body></html>";
+
+const FILE_HTML: &str = "\
+<html><head><title>File Page</title></head><body>\
+<input type=\"file\" id=\"upload\" />\
+<span id=\"file-info\">none</span>\
+<script>\
+document.getElementById('upload').addEventListener('change', function() {\
+  var f = this.files[0];\
+  document.getElementById('file-info').textContent = f ? f.name + ':' + f.size : 'none';\
+});\
 </script>\
 </body></html>";
 
@@ -788,6 +822,16 @@ fn test_close_then_operations_fail() {
     assert!(matches!(p.type_text("a"), Err(PageError::NoPage)));
     assert!(matches!(p.key_press("Enter"), Err(PageError::NoPage)));
     assert!(matches!(p.mouse_move(0.0, 0.0), Err(PageError::NoPage)));
+    assert!(matches!(p.scroll(0.0, 100.0), Err(PageError::NoPage)));
+    assert!(matches!(p.scroll_to_selector("h1"), Err(PageError::NoPage)));
+    assert!(matches!(
+        p.select_option("select", "v"),
+        Err(PageError::NoPage)
+    ));
+    assert!(matches!(
+        p.set_input_files("input", vec![]),
+        Err(PageError::NoPage)
+    ));
     assert!(matches!(p.get_cookies(), Err(PageError::NoPage)));
     assert!(matches!(p.set_cookie("a=b"), Err(PageError::NoPage)));
     assert!(matches!(p.clear_cookies(), Err(PageError::NoPage)));
@@ -865,6 +909,16 @@ fn test_all_methods_fail_before_open() {
     assert!(matches!(p.type_text("a"), Err(PageError::NoPage)));
     assert!(matches!(p.key_press("Enter"), Err(PageError::NoPage)));
     assert!(matches!(p.mouse_move(0.0, 0.0), Err(PageError::NoPage)));
+    assert!(matches!(p.scroll(0.0, 100.0), Err(PageError::NoPage)));
+    assert!(matches!(p.scroll_to_selector("h1"), Err(PageError::NoPage)));
+    assert!(matches!(
+        p.select_option("select", "v"),
+        Err(PageError::NoPage)
+    ));
+    assert!(matches!(
+        p.set_input_files("input", vec![]),
+        Err(PageError::NoPage)
+    ));
     assert!(matches!(p.get_cookies(), Err(PageError::NoPage)));
     assert!(matches!(p.set_cookie("a=b"), Err(PageError::NoPage)));
     assert!(matches!(p.clear_cookies(), Err(PageError::NoPage)));
@@ -897,4 +951,191 @@ fn test_all_methods_fail_before_open() {
     assert!(msgs.is_empty());
     let reqs = p.network_requests();
     assert!(reqs.is_empty());
+}
+
+// ---------------------------------------------------------------------------
+// Group 17: Scroll
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_scroll_down() {
+    reset_and_open(SCROLL_HTML);
+    let p = page();
+
+    p.scroll(0.0, 500.0).expect("scroll down failed");
+    p.wait(1.0);
+
+    let scroll_y = p.evaluate("window.scrollY").unwrap();
+    let y: f64 = scroll_y.parse().unwrap_or(0.0);
+    assert!(
+        y > 0.0,
+        "scrollY should be > 0 after scrolling down, got: {y}"
+    );
+}
+
+#[test]
+fn test_scroll_up() {
+    reset_and_open(SCROLL_HTML);
+    let p = page();
+
+    // Scroll down first
+    p.scroll(0.0, 500.0).expect("scroll down failed");
+    p.wait(1.0);
+    let y1: f64 = p.evaluate("window.scrollY").unwrap().parse().unwrap_or(0.0);
+
+    // Scroll back up
+    p.scroll(0.0, -200.0).expect("scroll up failed");
+    p.wait(1.0);
+    let y2: f64 = p.evaluate("window.scrollY").unwrap().parse().unwrap_or(0.0);
+
+    assert!(
+        y2 < y1,
+        "scrollY should decrease after scrolling up: before={y1}, after={y2}"
+    );
+}
+
+#[test]
+fn test_scroll_to_selector() {
+    reset_and_open(SCROLL_HTML);
+    let p = page();
+
+    p.scroll_to_selector("#bottom")
+        .expect("scroll_to_selector failed");
+    p.wait(0.3);
+
+    let scroll_y = p.evaluate("window.scrollY").unwrap();
+    let y: f64 = scroll_y.parse().unwrap_or(0.0);
+    assert!(
+        y > 0.0,
+        "scrollY should be > 0 after scrolling to #bottom, got: {y}"
+    );
+}
+
+#[test]
+fn test_scroll_to_selector_not_found() {
+    reset_and_open(SCROLL_HTML);
+
+    match page().scroll_to_selector("#nonexistent") {
+        Err(PageError::SelectorNotFound(sel)) => assert_eq!(sel, "#nonexistent"),
+        other => panic!("expected SelectorNotFound, got: {other:?}"),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Group 18: Select
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_select_option() {
+    reset_and_open(SELECT_HTML);
+    let p = page();
+
+    p.select_option("#color", "green")
+        .expect("select_option failed");
+    p.wait(0.3);
+
+    let value = p
+        .evaluate("document.getElementById('color').value")
+        .unwrap();
+    assert!(
+        value.contains("green"),
+        "select value should be 'green': {value}"
+    );
+
+    let displayed = p.element_text("#selected").unwrap();
+    assert_eq!(displayed, "green", "change event should have fired");
+}
+
+#[test]
+fn test_select_option_not_found() {
+    reset_and_open(SELECT_HTML);
+
+    match page().select_option("#nonexistent", "green") {
+        Err(PageError::SelectorNotFound(sel)) => assert_eq!(sel, "#nonexistent"),
+        other => panic!("expected SelectorNotFound, got: {other:?}"),
+    }
+}
+
+#[test]
+fn test_select_option_not_select() {
+    reset_and_open(SELECT_HTML);
+
+    match page().select_option("#selected", "green") {
+        Err(PageError::JsError(msg)) => {
+            assert!(
+                msg.contains("not a <select>"),
+                "error should mention not a select: {msg}"
+            );
+        }
+        other => panic!("expected JsError, got: {other:?}"),
+    }
+}
+
+#[test]
+fn test_select_option_no_value() {
+    reset_and_open(SELECT_HTML);
+
+    match page().select_option("#color", "purple") {
+        Err(PageError::JsError(msg)) => {
+            assert!(
+                msg.contains("no option"),
+                "error should mention no option: {msg}"
+            );
+        }
+        other => panic!("expected JsError, got: {other:?}"),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Group 19: File Upload
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_set_input_files() {
+    reset_and_open(FILE_HTML);
+    let p = page();
+
+    let files = vec![InputFile {
+        name: "test.txt".to_string(),
+        mime_type: "text/plain".to_string(),
+        data: b"hello world".to_vec(),
+    }];
+    p.set_input_files("#upload", files)
+        .expect("set_input_files failed");
+    p.wait(0.3);
+
+    let info = p.element_text("#file-info").unwrap();
+    assert!(
+        info.contains("test.txt"),
+        "file info should contain filename: {info}"
+    );
+    assert!(
+        info.contains("11"),
+        "file info should contain size 11: {info}"
+    );
+}
+
+#[test]
+fn test_set_input_files_not_found() {
+    reset_and_open(FILE_HTML);
+
+    match page().set_input_files("#nonexistent", vec![]) {
+        Err(PageError::SelectorNotFound(sel)) => assert_eq!(sel, "#nonexistent"),
+        other => panic!("expected SelectorNotFound, got: {other:?}"),
+    }
+}
+
+#[test]
+fn test_set_input_files_not_file() {
+    reset_and_open(FILE_HTML);
+
+    match page().set_input_files("#file-info", vec![]) {
+        Err(PageError::JsError(msg)) => {
+            assert!(
+                msg.contains("not an <input type=\"file\">"),
+                "error should mention not a file input: {msg}"
+            );
+        }
+        other => panic!("expected JsError, got: {other:?}"),
+    }
 }

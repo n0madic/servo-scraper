@@ -11,7 +11,10 @@ Available as a **CLI tool** and a **library** with FFI bindings for C, Python, J
 - **Screenshots** — full-page or viewport-only (PNG, JPG, BMP)
 - **HTML capture** — via JS evaluation (`document.documentElement.outerHTML`)
 - **Wait mechanisms** — wait for CSS selectors, JS conditions, navigation, or fixed time
-- **Input events** — click (coordinates or CSS selector), type text, press keys, mouse move
+- **Input events** — click (coordinates or CSS selector), type text, press keys, mouse move, scroll
+- **Scroll** — native wheel events or `scrollIntoView()` by CSS selector
+- **Select** — programmatic `<select>` dropdown manipulation with change event
+- **File upload** — inject files into `<input type="file">` via DataTransfer API
 - **Cookies** — get, set, and clear cookies via `document.cookie`
 - **Request interception** — block URLs matching patterns (images, trackers, etc.)
 - **Navigation** — reload, go back, go forward in history
@@ -49,7 +52,7 @@ make
 | Python smoke test | `make test-python` | verifies FFI symbols |
 | JS smoke test | `make test-js` | verifies koffi binding |
 | Go example | `make test-go` | `target/release/go_scraper` |
-| Integration tests | `cargo test` | 53 tests, ~60-90s |
+| Integration tests | `cargo test` | 64 tests, ~60-90s |
 
 ### Build Artifacts
 
@@ -152,6 +155,21 @@ engine.click_selector("input[name=search]").unwrap();
 engine.type_text("hello world").unwrap();
 engine.key_press("Enter").unwrap();
 
+// Scroll
+engine.scroll(0.0, 500.0).unwrap();           // scroll down 500px
+engine.scroll_to_selector("#footer").unwrap(); // scroll element into view
+
+// Select dropdown
+engine.select_option("select#country", "us").unwrap();
+
+// File upload
+use servo_scraper::InputFile;
+engine.set_input_files("input[type=file]", &[InputFile {
+    name: "doc.pdf".into(),
+    mime_type: "application/pdf".into(),
+    data: std::fs::read("doc.pdf").unwrap(),
+}]).unwrap();
+
 // Reset state for reuse (drops WebView, clears all buffers)
 engine.reset();
 ```
@@ -221,6 +239,14 @@ int page_click_selector(page, selector);
 int page_type_text(page, text);
 int page_key_press(page, key_name);
 int page_mouse_move(page, x, y);
+
+// Scroll
+int page_scroll(page, delta_x, delta_y);
+int page_scroll_to_selector(page, selector);
+
+// Select / File upload
+int page_select_option(page, selector, value);
+int page_set_input_files(page, selector, paths);  // comma-separated file paths
 
 // Memory
 void page_buffer_free(data, len);

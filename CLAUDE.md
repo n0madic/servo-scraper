@@ -25,7 +25,7 @@ cargo test          # Run integration tests (~60-90s)
 make test           # Same thing via Makefile
 ```
 
-The integration test suite (`tests/engine_integration.rs`) contains 53 tests covering all public `PageEngine`/`Page` methods — both success and error paths. Tests use a global `Page` singleton (Servo allows only one instance per process) with `data:text/html,...` URIs for fully self-contained, offline, deterministic operation.
+The integration test suite (`tests/engine_integration.rs`) contains tests covering all public `PageEngine`/`Page` methods — both success and error paths. Tests use a global `Page` singleton (Servo allows only one instance per process) with `data:text/html,...` URIs for fully self-contained, offline, deterministic operation.
 
 Tests must run single-threaded — `.cargo/config.toml` sets `RUST_TEST_THREADS=1` automatically, so plain `cargo test` works.
 
@@ -60,7 +60,7 @@ The library is organized into four modules under `src/`:
 ```
 src/
   lib.rs      Module declarations + re-exports
-  types.rs    Shared public types (PageOptions, ConsoleMessage, NetworkRequest, PageError, ElementRect)
+  types.rs    Shared public types (PageOptions, ConsoleMessage, NetworkRequest, PageError, ElementRect, InputFile)
   engine.rs   PageEngine + all internal utilities (event loop, delegate, capture helpers)
   page.rs     Page (thread-safe wrapper) + Command enum
   ffi.rs      All extern "C" functions + error codes
@@ -108,6 +108,10 @@ Three architectural layers (dependency graph: `types ← engine ← page ← ffi
 | `type_text(text)` | Type text via key events |
 | `key_press(name)` | Press a named key (Enter, Tab, etc.) |
 | `mouse_move(x, y)` | Move mouse to coordinates |
+| `scroll(delta_x, delta_y)` | Scroll viewport by pixel deltas (positive y = scroll down) |
+| `scroll_to_selector(css)` | Scroll element into view via `scrollIntoView()` |
+| `select_option(css, value)` | Select `<select>` option by value, fires change event |
+| `set_input_files(css, files)` | Set files on `<input type="file">` via DataTransfer API |
 | `close()` | Drop the WebView |
 | `reset()` | Drop WebView + clear blocked URLs, console messages, network requests |
 
@@ -125,7 +129,10 @@ Three architectural layers (dependency graph: `types ← engine ← page ← ffi
 - **Event loop** uses a condvar-based sleep/wake pattern with 5ms poll intervals.
 - **Full-page screenshots** work by evaluating JS to get `scrollHeight`, then resizing the rendering context and viewport.
 - **HTML capture** uses JS evaluation of `document.documentElement.outerHTML`.
-- **Input events** use `WebView::notify_input_event()` with MouseButton/Keyboard/MouseMove events.
+- **Input events** use `WebView::notify_input_event()` with MouseButton/Keyboard/MouseMove/Wheel events.
+- **Scroll** uses native `WheelEvent` with negated deltas (Servo's convention: positive = scroll up; our API: positive = scroll down). `scroll_to_selector` uses JS `scrollIntoView()`.
+- **Select** uses JS to set `<select>.value` and dispatch `input`+`change` events.
+- **File upload** uses JS DataTransfer API with base64-encoded file data to set `input.files` and dispatch `change` event. Depends on the `base64` crate.
 - **Event-driven frame waiting** — `PageDelegate` tracks a `frame_count: Cell<u64>` incremented by `notify_new_frame_ready`. Two helpers drive all waiting: `wait_for_frame(timeout)` blocks until at least one new frame is painted, and `wait_for_idle(idle_duration, max_timeout)` blocks until no new frames arrive for `idle_duration`. This replaces all arbitrary `spin_for`/`spin_briefly` delays (except the explicit `wait(seconds)` API). Input events, full-page screenshots, selector/condition polling, and post-load settling all use these frame-driven primitives.
 - CLI argument parsing uses **bpaf** (derive mode).
 
@@ -155,6 +162,7 @@ Three architectural layers (dependency graph: `types ← engine ← page ← ffi
 
 - **Servo** is included as a git submodule at `./servo` and consumed via `libservo` (path dependency).
 - **serde** + **serde_json** for JSON serialization (console messages, network requests, JS results).
+- **base64** for encoding file data in `set_input_files()`.
 - Requires Rust 1.86+ (edition 2024).
 - Release profile: LTO enabled, single codegen unit, `opt-level = "z"`, stripped, `panic = "abort"`.
 

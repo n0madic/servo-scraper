@@ -202,6 +202,33 @@ int page_key_press(ServoPage *page, const char *key_name);
  */
 int page_mouse_move(ServoPage *page, float x, float y);
 
+/* ── Scroll ────────────────────────────────────────────────────────── */
+
+/**
+ * Scroll the viewport by the given pixel deltas.
+ */
+int page_scroll(ServoPage *page, double delta_x, double delta_y);
+
+/**
+ * Scroll an element matching a CSS selector into view.
+ */
+int page_scroll_to_selector(ServoPage *page, const char *selector);
+
+/* ── Select ────────────────────────────────────────────────────────── */
+
+/**
+ * Select an option in a <select> element by value.
+ */
+int page_select_option(ServoPage *page, const char *selector, const char *value);
+
+/* ── File upload ───────────────────────────────────────────────────── */
+
+/**
+ * Set files on an <input type="file"> element.
+ * `paths` is a comma-separated list of file paths.
+ */
+int page_set_input_files(ServoPage *page, const char *selector, const char *paths);
+
 /* ── Cookies ───────────────────────────────────────────────────────── */
 
 /**
