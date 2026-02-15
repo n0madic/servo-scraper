@@ -18,13 +18,13 @@ use servo::resources::{self, Resource, ResourceReaderMethods};
 use servo::{
     ConsoleLogLevel, DevicePoint, EmbedderControl, EventLoopWaker, InputEvent, JSValue, Key,
     KeyState, KeyboardEvent, LoadStatus, MouseButton, MouseButtonAction, MouseButtonEvent,
-    MouseMoveEvent, NamedKey, RenderingContext, Servo, ServoBuilder, SimpleDialog,
-    SoftwareRenderingContext, WebResourceLoad, WebView, WebViewBuilder, WebViewDelegate,
-    WebViewPoint,
+    MouseMoveEvent, NamedKey, Preferences, RenderingContext, Servo, ServoBuilder, SimpleDialog,
+    SoftwareRenderingContext, WebResourceLoad, WebResourceResponse, WebView, WebViewBuilder,
+    WebViewDelegate, WebViewPoint,
 };
 use url::Url;
 
-use crate::types::{ConsoleMessage, NetworkRequest, PageError, PageOptions};
+use crate::types::{ConsoleMessage, ElementRect, NetworkRequest, PageError, PageOptions};
 
 // ---------------------------------------------------------------------------
 // Internal: Suppress stderr from system libraries
@@ -239,6 +239,7 @@ struct PageDelegate {
     frame_count: Cell<u64>,
     console_messages: RefCell<Vec<ConsoleMessage>>,
     network_requests: RefCell<Vec<NetworkRequest>>,
+    blocked_url_patterns: RefCell<Vec<String>>,
 }
 
 impl WebViewDelegate for PageDelegate {
@@ -270,12 +271,25 @@ impl WebViewDelegate for PageDelegate {
 
     fn load_web_resource(&self, _webview: WebView, load: WebResourceLoad) {
         let request = load.request();
+        let url_str = request.url.to_string();
         self.network_requests.borrow_mut().push(NetworkRequest {
             method: request.method.to_string(),
-            url: request.url.to_string(),
+            url: url_str.clone(),
             is_main_frame: request.is_for_main_frame,
         });
-        // Don't intercept — let the load continue normally by dropping `load`.
+
+        // Check if URL matches any blocked pattern.
+        let blocked = self
+            .blocked_url_patterns
+            .borrow()
+            .iter()
+            .any(|pattern| url_str.contains(pattern));
+
+        if blocked {
+            let response = WebResourceResponse::new(request.url.clone());
+            load.intercept(response).cancel();
+        }
+        // Otherwise drop `load` to let it continue normally.
     }
 
     fn show_embedder_control(&self, _webview: WebView, embedder_control: EmbedderControl) {
@@ -482,7 +496,13 @@ impl PageEngine {
             .make_current()
             .map_err(|e| PageError::InitFailed(format!("make_current: {e:?}")))?;
 
-        let servo = ServoBuilder::default().event_loop_waker(waker).build();
+        let mut builder = ServoBuilder::default().event_loop_waker(waker);
+        if let Some(ref ua) = options.user_agent {
+            let mut prefs = Preferences::default();
+            prefs.user_agent = ua.clone();
+            builder = builder.preferences(prefs);
+        }
+        let servo = builder.build();
         servo.setup_logging();
 
         Ok(Self {
@@ -499,23 +519,8 @@ impl PageEngine {
         self.webview.as_ref().ok_or(PageError::NoPage)
     }
 
-    /// Open a URL. Creates a new WebView or navigates the existing one.
-    pub fn open(&mut self, url: &str) -> Result<(), PageError> {
-        let parsed_url =
-            Url::parse(url).map_err(|e| PageError::LoadFailed(format!("invalid URL: {e}")))?;
-
-        self.delegate.load_complete.set(false);
-
-        if let Some(ref webview) = self.webview {
-            webview.load(parsed_url);
-        } else {
-            let webview = WebViewBuilder::new(&self.servo, self.rendering_context.clone())
-                .delegate(self.delegate.clone())
-                .url(parsed_url)
-                .build();
-            self.webview = Some(webview);
-        }
-
+    /// Wait for the current load to complete (spin until `load_complete` + idle wait).
+    fn wait_for_load(&self) -> Result<(), PageError> {
         let delegate = self.delegate.clone();
         let loaded = with_stderr_suppressed(|| {
             let loaded = spin_until(
@@ -543,6 +548,26 @@ impl PageEngine {
         }
 
         Ok(())
+    }
+
+    /// Open a URL. Creates a new WebView or navigates the existing one.
+    pub fn open(&mut self, url: &str) -> Result<(), PageError> {
+        let parsed_url =
+            Url::parse(url).map_err(|e| PageError::LoadFailed(format!("invalid URL: {e}")))?;
+
+        self.delegate.load_complete.set(false);
+
+        if let Some(ref webview) = self.webview {
+            webview.load(parsed_url);
+        } else {
+            let webview = WebViewBuilder::new(&self.servo, self.rendering_context.clone())
+                .delegate(self.delegate.clone())
+                .url(parsed_url)
+                .build();
+            self.webview = Some(webview);
+        }
+
+        self.wait_for_load()
     }
 
     /// Evaluate JavaScript and return the result as a JSON string.
@@ -853,5 +878,245 @@ impl PageEngine {
             Duration::from_secs(2),
         );
         Ok(())
+    }
+
+    // -- Cookies (JS-based) --
+
+    /// Get cookies for the current page via `document.cookie`.
+    pub fn get_cookies(&self) -> Result<String, PageError> {
+        let webview = self.webview()?;
+        match eval_js(
+            &self.servo,
+            &self.event_loop,
+            webview,
+            "document.cookie",
+            self.options.timeout,
+        )? {
+            JSValue::String(s) => Ok(s),
+            other => Err(PageError::JsError(format!(
+                "unexpected cookie result: {other:?}"
+            ))),
+        }
+    }
+
+    /// Set a cookie via `document.cookie = '...'`.
+    pub fn set_cookie(&self, cookie: &str) -> Result<(), PageError> {
+        let webview = self.webview()?;
+        let escaped = cookie.replace('\\', "\\\\").replace('\'', "\\'");
+        let js = format!("document.cookie = '{escaped}'");
+        eval_js(
+            &self.servo,
+            &self.event_loop,
+            webview,
+            &js,
+            self.options.timeout,
+        )?;
+        Ok(())
+    }
+
+    /// Clear all cookies by expiring each one.
+    pub fn clear_cookies(&self) -> Result<(), PageError> {
+        let webview = self.webview()?;
+        let js = r#"(function() {
+            var cookies = document.cookie.split(';');
+            for (var i = 0; i < cookies.length; i++) {
+                var name = cookies[i].split('=')[0].trim();
+                if (name) {
+                    document.cookie = name + '=;expires=Thu, 01 Jan 1970 00:00:00 GMT;path=/';
+                }
+            }
+        })()"#;
+        eval_js(
+            &self.servo,
+            &self.event_loop,
+            webview,
+            js,
+            self.options.timeout,
+        )?;
+        Ok(())
+    }
+
+    // -- Request interception --
+
+    /// Set URL patterns to block. Any request whose URL contains a pattern is cancelled.
+    pub fn block_urls(&self, patterns: Vec<String>) {
+        *self.delegate.blocked_url_patterns.borrow_mut() = patterns;
+    }
+
+    /// Clear all blocked URL patterns.
+    pub fn clear_blocked_urls(&self) {
+        self.delegate.blocked_url_patterns.borrow_mut().clear();
+    }
+
+    // -- Navigation --
+
+    /// Reload the current page.
+    pub fn reload(&self) -> Result<(), PageError> {
+        let webview = self.webview()?;
+        self.delegate.load_complete.set(false);
+        webview.reload();
+        self.wait_for_load()
+    }
+
+    /// Navigate back in history. Returns `false` if there is no history to go back to.
+    pub fn go_back(&self) -> Result<bool, PageError> {
+        let webview = self.webview()?;
+        if !webview.can_go_back() {
+            return Ok(false);
+        }
+        self.delegate.load_complete.set(false);
+        webview.go_back(1);
+        self.wait_for_load()?;
+        Ok(true)
+    }
+
+    /// Navigate forward in history. Returns `false` if there is no forward history.
+    pub fn go_forward(&self) -> Result<bool, PageError> {
+        let webview = self.webview()?;
+        if !webview.can_go_forward() {
+            return Ok(false);
+        }
+        self.delegate.load_complete.set(false);
+        webview.go_forward(1);
+        self.wait_for_load()?;
+        Ok(true)
+    }
+
+    // -- Element info (JS-based) --
+
+    /// Get the bounding rectangle of the first element matching a CSS selector.
+    pub fn element_rect(&self, selector: &str) -> Result<ElementRect, PageError> {
+        let webview = self.webview()?;
+        let escaped = selector.replace('\\', "\\\\").replace('\'', "\\'");
+        let js = format!(
+            "(function() {{ \
+                var el = document.querySelector('{escaped}'); \
+                if (!el) return null; \
+                var r = el.getBoundingClientRect(); \
+                return [r.x, r.y, r.width, r.height]; \
+            }})()"
+        );
+
+        match eval_js(
+            &self.servo,
+            &self.event_loop,
+            webview,
+            &js,
+            self.options.timeout,
+        )? {
+            JSValue::Array(arr) if arr.len() == 4 => {
+                let nums: Vec<f64> = arr
+                    .iter()
+                    .map(|v| match v {
+                        JSValue::Number(n) => Ok(*n),
+                        _ => Err(PageError::JsError("invalid rect value".into())),
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
+                Ok(ElementRect {
+                    x: nums[0],
+                    y: nums[1],
+                    width: nums[2],
+                    height: nums[3],
+                })
+            }
+            JSValue::Null | JSValue::Undefined => {
+                Err(PageError::SelectorNotFound(selector.to_string()))
+            }
+            other => Err(PageError::JsError(format!(
+                "unexpected rect result: {other:?}"
+            ))),
+        }
+    }
+
+    /// Get the text content of the first element matching a CSS selector.
+    pub fn element_text(&self, selector: &str) -> Result<String, PageError> {
+        let webview = self.webview()?;
+        let escaped = selector.replace('\\', "\\\\").replace('\'', "\\'");
+        let js = format!(
+            "(function() {{ \
+                var el = document.querySelector('{escaped}'); \
+                if (!el) return null; \
+                return el.textContent; \
+            }})()"
+        );
+
+        match eval_js(
+            &self.servo,
+            &self.event_loop,
+            webview,
+            &js,
+            self.options.timeout,
+        )? {
+            JSValue::String(s) => Ok(s),
+            JSValue::Null | JSValue::Undefined => {
+                Err(PageError::SelectorNotFound(selector.to_string()))
+            }
+            other => Err(PageError::JsError(format!(
+                "unexpected text result: {other:?}"
+            ))),
+        }
+    }
+
+    /// Get an attribute value of the first element matching a CSS selector.
+    /// Returns `Ok(None)` if the element exists but the attribute does not.
+    pub fn element_attribute(
+        &self,
+        selector: &str,
+        attribute: &str,
+    ) -> Result<Option<String>, PageError> {
+        let webview = self.webview()?;
+        let esc_sel = selector.replace('\\', "\\\\").replace('\'', "\\'");
+        let esc_attr = attribute.replace('\\', "\\\\").replace('\'', "\\'");
+        let js = format!(
+            "(function() {{ \
+                var el = document.querySelector('{esc_sel}'); \
+                if (!el) return undefined; \
+                return el.getAttribute('{esc_attr}'); \
+            }})()"
+        );
+
+        match eval_js(
+            &self.servo,
+            &self.event_loop,
+            webview,
+            &js,
+            self.options.timeout,
+        )? {
+            JSValue::String(s) => Ok(Some(s)),
+            JSValue::Null => Ok(None),
+            JSValue::Undefined => Err(PageError::SelectorNotFound(selector.to_string())),
+            other => Err(PageError::JsError(format!(
+                "unexpected attribute result: {other:?}"
+            ))),
+        }
+    }
+
+    /// Get the outer HTML of the first element matching a CSS selector.
+    pub fn element_html(&self, selector: &str) -> Result<String, PageError> {
+        let webview = self.webview()?;
+        let escaped = selector.replace('\\', "\\\\").replace('\'', "\\'");
+        let js = format!(
+            "(function() {{ \
+                var el = document.querySelector('{escaped}'); \
+                if (!el) return null; \
+                return el.outerHTML; \
+            }})()"
+        );
+
+        match eval_js(
+            &self.servo,
+            &self.event_loop,
+            webview,
+            &js,
+            self.options.timeout,
+        )? {
+            JSValue::String(s) => Ok(s),
+            JSValue::Null | JSValue::Undefined => {
+                Err(PageError::SelectorNotFound(selector.to_string()))
+            }
+            other => Err(PageError::JsError(format!(
+                "unexpected html result: {other:?}"
+            ))),
+        }
     }
 }

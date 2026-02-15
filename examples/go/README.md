@@ -58,8 +58,8 @@ package main
 import "C"
 import "unsafe"
 
-// Create page (width, height, timeout_sec, wait_sec, fullpage)
-page := C.page_new(1280, 720, 30, 2.0, 0)
+// Create page (width, height, timeout_sec, wait_sec, fullpage, user_agent)
+page := C.page_new(1280, 720, 30, 2.0, 0, nil)
 defer C.page_free(page)
 
 // Open URL

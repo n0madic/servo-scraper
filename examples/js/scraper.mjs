@@ -50,7 +50,7 @@ const lib = koffi.load(libPath);
 const ServoPage = koffi.pointer("ServoPage", koffi.opaque());
 
 const page_new = lib.func(
-  "ServoPage *page_new(uint32_t width, uint32_t height, uint64_t timeout, double wait, int fullpage)",
+  "ServoPage *page_new(uint32_t width, uint32_t height, uint64_t timeout, double wait, int fullpage, const char *user_agent)",
 );
 const page_free = lib.func("void page_free(ServoPage *page)");
 const page_open = lib.func(
@@ -84,7 +84,7 @@ const [, , url, pngPath, htmlPath] = process.argv;
 
 // 1. Create page
 console.error("Creating page...");
-const page = page_new(1280, 720, 30, 2.0, 0);
+const page = page_new(1280, 720, 30, 2.0, 0, null);
 if (!page) {
   console.error("Error: failed to create page");
   process.exit(1);

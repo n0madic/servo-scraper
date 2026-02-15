@@ -69,6 +69,14 @@ struct CliConfig {
     #[bpaf(long, short)]
     fullpage: bool,
 
+    /// Custom User-Agent string
+    #[bpaf(long("user-agent"), argument("STRING"))]
+    user_agent: Option<String>,
+
+    /// Comma-separated URL patterns to block (e.g. ".png,.jpg,.gif")
+    #[bpaf(long("block-urls"), argument("PATTERNS"))]
+    block_urls: Option<String>,
+
     /// URL to load
     #[bpaf(positional::<String>("URL"), parse(parse_url))]
     url: Url,
@@ -102,12 +110,22 @@ fn main() {
         timeout: config.timeout,
         wait: config.wait,
         fullpage: config.fullpage,
+        user_agent: config.user_agent.clone(),
     };
 
     let mut engine = PageEngine::new(options).unwrap_or_else(|e| {
         eprintln!("Error: failed to initialize engine: {e}");
         process::exit(1);
     });
+
+    if let Some(ref patterns_str) = config.block_urls {
+        let patterns: Vec<String> = patterns_str
+            .split(',')
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .collect();
+        engine.block_urls(patterns);
+    }
 
     eprintln!("Loading {}...", config.url);
 

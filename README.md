@@ -12,6 +12,11 @@ Available as a **CLI tool** and a **library** with FFI bindings for C, Python, J
 - **HTML capture** — via JS evaluation (`document.documentElement.outerHTML`)
 - **Wait mechanisms** — wait for CSS selectors, JS conditions, navigation, or fixed time
 - **Input events** — click (coordinates or CSS selector), type text, press keys, mouse move
+- **Cookies** — get, set, and clear cookies via `document.cookie`
+- **Request interception** — block URLs matching patterns (images, trackers, etc.)
+- **Navigation** — reload, go back, go forward in history
+- **Element info** — get bounding rect, text content, attributes, and HTML of elements
+- **Custom User-Agent** — set via `PageOptions` or `--user-agent` CLI flag
 - **Console capture** — collect `console.log/warn/error` messages
 - **Network monitoring** — observe HTTP requests made during page load
 - **Dialog auto-dismiss** — alert/confirm/prompt dialogs are automatically handled
@@ -75,6 +80,12 @@ servo-scraper --eval-file script.js https://example.com
 # Wait for a CSS selector before capturing
 servo-scraper --wait-for "h1" --screenshot page.png https://example.com
 
+# Custom User-Agent
+servo-scraper --user-agent "MyBot/1.0" --eval "navigator.userAgent" https://example.com
+
+# Block images and tracking pixels
+servo-scraper --block-urls ".png,.jpg,.gif,.svg,.tracker" --screenshot page.png https://example.com
+
 # Combined
 servo-scraper --eval "document.title" --screenshot page.png --html page.html --width 1920 --height 1080 https://example.com
 ```
@@ -89,6 +100,8 @@ servo-scraper --eval "document.title" --screenshot page.png --html page.html --w
 | `--eval-file <PATH>` | Evaluate JS from a file, print JSON result to stdout | — |
 | `--wait-for <SELECTOR>` | Wait for CSS selector before capturing | — |
 | `--fullpage` | Capture full scrollable page | off |
+| `--user-agent <STRING>` | Custom User-Agent string | Servo default |
+| `--block-urls <PATTERNS>` | Comma-separated URL patterns to block | — |
 | `--width <PX>` | Viewport width | 1280 |
 | `--height <PX>` | Viewport height | 720 |
 | `--timeout <SEC>` | Max page load wait | 30 |
@@ -100,11 +113,34 @@ servo-scraper --eval "document.title" --screenshot page.png --html page.html --w
 use servo_scraper::{PageEngine, PageOptions};
 
 // Layer 1: Single-threaded (for CLI / direct use)
-let mut engine = PageEngine::new(PageOptions::default()).unwrap();
+let options = PageOptions {
+    user_agent: Some("MyBot/1.0".into()),
+    ..PageOptions::default()
+};
+let mut engine = PageEngine::new(options).unwrap();
+
+// Block tracking/ad resources
+engine.block_urls(vec![".tracker".into(), "ads.".into()]);
+
 engine.open("https://example.com").unwrap();
 let title = engine.evaluate("document.title").unwrap();  // JSON string
 let html = engine.html().unwrap();
 let png = engine.screenshot().unwrap();
+
+// Cookies
+let cookies = engine.get_cookies().unwrap();
+engine.set_cookie("name=value; path=/").unwrap();
+
+// Navigation
+engine.reload().unwrap();
+engine.go_back();   // Ok(false) if no history
+engine.go_forward(); // Ok(false) if no forward history
+
+// Element info
+let rect = engine.element_rect("h1").unwrap();
+let text = engine.element_text("h1").unwrap();
+let href = engine.element_attribute("a", "href").unwrap();
+let el_html = engine.element_html("h1").unwrap();
 
 // Wait for element, then click it
 engine.wait_for_selector("button#submit", 10).unwrap();
@@ -131,11 +167,14 @@ All functions are prefixed with `page_`. See [`examples/c/servo_scraper.h`](exam
 
 ```c
 // Lifecycle
-ServoPage *page_new(width, height, timeout, wait, fullpage);
+ServoPage *page_new(width, height, timeout, wait, fullpage, user_agent);
 void       page_free(ServoPage *page);
 
 // Navigation
 int page_open(page, url);
+int page_reload(page);
+int page_go_back(page);
+int page_go_forward(page);
 
 // Capture
 int page_evaluate(page, script, &out_json, &out_len);
@@ -146,6 +185,20 @@ int page_html(page, &out_html, &out_len);
 // Page info
 int page_url(page, &out_url, &out_len);
 int page_title(page, &out_title, &out_len);
+
+// Cookies
+int page_get_cookies(page, &out_cookies, &out_len);
+int page_set_cookie(page, cookie);
+int page_clear_cookies(page);
+
+// Request interception
+int page_block_urls(page, patterns);  // comma-separated, NULL = clear
+
+// Element info
+int page_element_rect(page, selector, &out_json, &out_len);
+int page_element_text(page, selector, &out_text, &out_len);
+int page_element_attribute(page, selector, attribute, &out_value, &out_len);
+int page_element_html(page, selector, &out_html, &out_len);
 
 // Events (JSON arrays)
 int page_console_messages(page, &out_json, &out_len);

@@ -93,7 +93,7 @@ func main() {
 
 	// 1. Create page (1280x720, 30s timeout, 2s settle, no fullpage)
 	fmt.Fprintf(os.Stderr, "Creating page...\n")
-	page := C.page_new(1280, 720, 30, 2.0, 0)
+	page := C.page_new(1280, 720, 30, 2.0, 0, nil)
 	if page == nil {
 		fmt.Fprintf(os.Stderr, "Error: failed to create page\n")
 		os.Exit(1)

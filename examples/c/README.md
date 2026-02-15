@@ -36,7 +36,8 @@ LD_LIBRARY_PATH=target/release ./target/release/test_scraper <URL> <screenshot.p
 ```c
 // Create a page (spawns background Servo thread)
 ServoPage *page_new(uint32_t width, uint32_t height,
-                     uint64_t timeout, double wait, int fullpage);
+                     uint64_t timeout, double wait, int fullpage,
+                     const char *user_agent);
 
 // Take a screenshot, returns PNG bytes
 // Caller must free with page_buffer_free()
@@ -72,7 +73,7 @@ void page_string_free(char *s);
 ```c
 #include "servo_scraper.h"
 
-ServoPage *p = page_new(1280, 720, 30, 2.0, 0);
+ServoPage *p = page_new(1280, 720, 30, 2.0, 0, NULL);
 page_open(p, "https://example.com");
 
 uint8_t *png; size_t png_len;

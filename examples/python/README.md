@@ -32,8 +32,8 @@ import ctypes
 
 lib = ctypes.CDLL("target/release/libservo_scraper.dylib")
 
-# Create page (width, height, timeout_sec, wait_sec, fullpage)
-page = lib.page_new(1280, 720, 30, 2.0, 0)
+# Create page (width, height, timeout_sec, wait_sec, fullpage, user_agent)
+page = lib.page_new(1280, 720, 30, 2.0, 0, None)
 
 # Open URL
 lib.page_open(page, b"https://example.com")

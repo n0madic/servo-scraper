@@ -38,23 +38,36 @@ fn error_code(e: &PageError) -> i32 {
 /// Returns an opaque pointer, or NULL on failure.
 /// The caller must free it with `page_free()`.
 ///
+/// `user_agent` may be NULL to use the default User-Agent.
+///
 /// # Safety
 ///
 /// The returned pointer must be freed with `page_free()`.
+/// `user_agent`, if not NULL, must be a valid C string.
 #[unsafe(no_mangle)]
-pub extern "C" fn page_new(
+pub unsafe extern "C" fn page_new(
     width: u32,
     height: u32,
     timeout: u64,
     wait: f64,
     fullpage: i32,
+    user_agent: *const std::ffi::c_char,
 ) -> *mut Page {
+    let ua = if user_agent.is_null() {
+        None
+    } else {
+        match unsafe { std::ffi::CStr::from_ptr(user_agent) }.to_str() {
+            Ok(s) => Some(s.to_string()),
+            Err(_) => None,
+        }
+    };
     let options = PageOptions {
         width,
         height,
         timeout,
         wait,
         fullpage: fullpage != 0,
+        user_agent: ua,
     };
     match Page::new(options) {
         Ok(p) => Box::into_raw(Box::new(p)),
@@ -547,6 +560,334 @@ pub unsafe extern "C" fn page_mouse_move(page: *mut Page, x: f32, y: f32) -> i32
     let page = unsafe { &*page };
     match page.mouse_move(x, y) {
         Ok(()) => PAGE_OK,
+        Err(e) => error_code(&e),
+    }
+}
+
+// -- Cookies FFI --
+
+/// Get cookies for the current page.
+///
+/// On success, `*out_cookies` and `*out_len` are set. Free with `page_string_free()`.
+///
+/// # Safety
+///
+/// All pointer arguments must be valid or NULL.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn page_get_cookies(
+    page: *mut Page,
+    out_cookies: *mut *mut std::ffi::c_char,
+    out_len: *mut usize,
+) -> i32 {
+    if page.is_null() || out_cookies.is_null() || out_len.is_null() {
+        return PAGE_ERR_NULL_PTR;
+    }
+    let page = unsafe { &*page };
+    match page.get_cookies() {
+        Ok(cookies) => match std::ffi::CString::new(cookies) {
+            Ok(cstr) => {
+                let len = cstr.as_bytes().len();
+                let ptr = cstr.into_raw();
+                unsafe {
+                    *out_cookies = ptr;
+                    *out_len = len;
+                }
+                PAGE_OK
+            }
+            Err(_) => PAGE_ERR_JS,
+        },
+        Err(e) => error_code(&e),
+    }
+}
+
+/// Set a cookie via `document.cookie`.
+///
+/// # Safety
+///
+/// `page` and `cookie` must be valid pointers.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn page_set_cookie(page: *mut Page, cookie: *const std::ffi::c_char) -> i32 {
+    if page.is_null() || cookie.is_null() {
+        return PAGE_ERR_NULL_PTR;
+    }
+    let page = unsafe { &*page };
+    let cookie_str = match unsafe { std::ffi::CStr::from_ptr(cookie) }.to_str() {
+        Ok(s) => s,
+        Err(_) => return PAGE_ERR_JS,
+    };
+    match page.set_cookie(cookie_str) {
+        Ok(()) => PAGE_OK,
+        Err(e) => error_code(&e),
+    }
+}
+
+/// Clear all cookies for the current page.
+///
+/// # Safety
+///
+/// `page` must be a valid pointer.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn page_clear_cookies(page: *mut Page) -> i32 {
+    if page.is_null() {
+        return PAGE_ERR_NULL_PTR;
+    }
+    let page = unsafe { &*page };
+    match page.clear_cookies() {
+        Ok(()) => PAGE_OK,
+        Err(e) => error_code(&e),
+    }
+}
+
+// -- Request interception FFI --
+
+/// Set URL patterns to block (comma-separated). Pass NULL to clear.
+///
+/// # Safety
+///
+/// `page` must be a valid pointer. `patterns` may be NULL.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn page_block_urls(
+    page: *mut Page,
+    patterns: *const std::ffi::c_char,
+) -> i32 {
+    if page.is_null() {
+        return PAGE_ERR_NULL_PTR;
+    }
+    let page = unsafe { &*page };
+    if patterns.is_null() {
+        page.clear_blocked_urls();
+    } else {
+        let pat_str = match unsafe { std::ffi::CStr::from_ptr(patterns) }.to_str() {
+            Ok(s) => s,
+            Err(_) => return PAGE_ERR_JS,
+        };
+        let pats: Vec<String> = pat_str
+            .split(',')
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .collect();
+        page.block_urls(pats);
+    }
+    PAGE_OK
+}
+
+// -- Navigation FFI --
+
+/// Reload the current page.
+///
+/// # Safety
+///
+/// `page` must be a valid pointer.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn page_reload(page: *mut Page) -> i32 {
+    if page.is_null() {
+        return PAGE_ERR_NULL_PTR;
+    }
+    let page = unsafe { &*page };
+    match page.reload() {
+        Ok(()) => PAGE_OK,
+        Err(e) => error_code(&e),
+    }
+}
+
+/// Navigate back in history. Returns `PAGE_ERR_NO_PAGE` if no history.
+///
+/// # Safety
+///
+/// `page` must be a valid pointer.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn page_go_back(page: *mut Page) -> i32 {
+    if page.is_null() {
+        return PAGE_ERR_NULL_PTR;
+    }
+    let page = unsafe { &*page };
+    match page.go_back() {
+        Ok(true) => PAGE_OK,
+        Ok(false) => PAGE_ERR_NO_PAGE,
+        Err(e) => error_code(&e),
+    }
+}
+
+/// Navigate forward in history. Returns `PAGE_ERR_NO_PAGE` if no forward history.
+///
+/// # Safety
+///
+/// `page` must be a valid pointer.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn page_go_forward(page: *mut Page) -> i32 {
+    if page.is_null() {
+        return PAGE_ERR_NULL_PTR;
+    }
+    let page = unsafe { &*page };
+    match page.go_forward() {
+        Ok(true) => PAGE_OK,
+        Ok(false) => PAGE_ERR_NO_PAGE,
+        Err(e) => error_code(&e),
+    }
+}
+
+// -- Element info FFI --
+
+/// Get the bounding rectangle of an element as JSON (`{"x":..,"y":..,"width":..,"height":..}`).
+///
+/// # Safety
+///
+/// All pointer arguments must be valid or NULL.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn page_element_rect(
+    page: *mut Page,
+    selector: *const std::ffi::c_char,
+    out_json: *mut *mut std::ffi::c_char,
+    out_len: *mut usize,
+) -> i32 {
+    if page.is_null() || selector.is_null() || out_json.is_null() || out_len.is_null() {
+        return PAGE_ERR_NULL_PTR;
+    }
+    let page = unsafe { &*page };
+    let sel = match unsafe { std::ffi::CStr::from_ptr(selector) }.to_str() {
+        Ok(s) => s,
+        Err(_) => return PAGE_ERR_JS,
+    };
+    match page.element_rect(sel) {
+        Ok(rect) => {
+            let json = serde_json::to_string(&rect).unwrap_or_else(|_| "{}".to_string());
+            match std::ffi::CString::new(json) {
+                Ok(cstr) => {
+                    let len = cstr.as_bytes().len();
+                    let ptr = cstr.into_raw();
+                    unsafe {
+                        *out_json = ptr;
+                        *out_len = len;
+                    }
+                    PAGE_OK
+                }
+                Err(_) => PAGE_ERR_JS,
+            }
+        }
+        Err(e) => error_code(&e),
+    }
+}
+
+/// Get the text content of an element.
+///
+/// # Safety
+///
+/// All pointer arguments must be valid or NULL.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn page_element_text(
+    page: *mut Page,
+    selector: *const std::ffi::c_char,
+    out_text: *mut *mut std::ffi::c_char,
+    out_len: *mut usize,
+) -> i32 {
+    if page.is_null() || selector.is_null() || out_text.is_null() || out_len.is_null() {
+        return PAGE_ERR_NULL_PTR;
+    }
+    let page = unsafe { &*page };
+    let sel = match unsafe { std::ffi::CStr::from_ptr(selector) }.to_str() {
+        Ok(s) => s,
+        Err(_) => return PAGE_ERR_JS,
+    };
+    match page.element_text(sel) {
+        Ok(text) => match std::ffi::CString::new(text) {
+            Ok(cstr) => {
+                let len = cstr.as_bytes().len();
+                let ptr = cstr.into_raw();
+                unsafe {
+                    *out_text = ptr;
+                    *out_len = len;
+                }
+                PAGE_OK
+            }
+            Err(_) => PAGE_ERR_JS,
+        },
+        Err(e) => error_code(&e),
+    }
+}
+
+/// Get an attribute value of an element. Returns empty string if attribute doesn't exist.
+///
+/// # Safety
+///
+/// All pointer arguments must be valid or NULL.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn page_element_attribute(
+    page: *mut Page,
+    selector: *const std::ffi::c_char,
+    attribute: *const std::ffi::c_char,
+    out_value: *mut *mut std::ffi::c_char,
+    out_len: *mut usize,
+) -> i32 {
+    if page.is_null()
+        || selector.is_null()
+        || attribute.is_null()
+        || out_value.is_null()
+        || out_len.is_null()
+    {
+        return PAGE_ERR_NULL_PTR;
+    }
+    let page = unsafe { &*page };
+    let sel = match unsafe { std::ffi::CStr::from_ptr(selector) }.to_str() {
+        Ok(s) => s,
+        Err(_) => return PAGE_ERR_JS,
+    };
+    let attr = match unsafe { std::ffi::CStr::from_ptr(attribute) }.to_str() {
+        Ok(s) => s,
+        Err(_) => return PAGE_ERR_JS,
+    };
+    match page.element_attribute(sel, attr) {
+        Ok(value) => {
+            let s = value.unwrap_or_default();
+            match std::ffi::CString::new(s) {
+                Ok(cstr) => {
+                    let len = cstr.as_bytes().len();
+                    let ptr = cstr.into_raw();
+                    unsafe {
+                        *out_value = ptr;
+                        *out_len = len;
+                    }
+                    PAGE_OK
+                }
+                Err(_) => PAGE_ERR_JS,
+            }
+        }
+        Err(e) => error_code(&e),
+    }
+}
+
+/// Get the outer HTML of an element.
+///
+/// # Safety
+///
+/// All pointer arguments must be valid or NULL.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn page_element_html(
+    page: *mut Page,
+    selector: *const std::ffi::c_char,
+    out_html: *mut *mut std::ffi::c_char,
+    out_len: *mut usize,
+) -> i32 {
+    if page.is_null() || selector.is_null() || out_html.is_null() || out_len.is_null() {
+        return PAGE_ERR_NULL_PTR;
+    }
+    let page = unsafe { &*page };
+    let sel = match unsafe { std::ffi::CStr::from_ptr(selector) }.to_str() {
+        Ok(s) => s,
+        Err(_) => return PAGE_ERR_JS,
+    };
+    match page.element_html(sel) {
+        Ok(html) => match std::ffi::CString::new(html) {
+            Ok(cstr) => {
+                let len = cstr.as_bytes().len();
+                let ptr = cstr.into_raw();
+                unsafe {
+                    *out_html = ptr;
+                    *out_len = len;
+                }
+                PAGE_OK
+            }
+            Err(_) => PAGE_ERR_JS,
+        },
         Err(e) => error_code(&e),
     }
 }

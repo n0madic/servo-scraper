@@ -21,6 +21,8 @@ pub struct PageOptions {
     pub wait: f64,
     /// Capture the full scrollable page, not just the viewport (default: false).
     pub fullpage: bool,
+    /// Custom User-Agent string. `None` uses Servo's default.
+    pub user_agent: Option<String>,
 }
 
 impl Default for PageOptions {
@@ -31,8 +33,18 @@ impl Default for PageOptions {
             timeout: 30,
             wait: 2.0,
             fullpage: false,
+            user_agent: None,
         }
     }
+}
+
+/// Bounding rectangle of an element on the page.
+#[derive(Debug, Clone, Serialize)]
+pub struct ElementRect {
+    pub x: f64,
+    pub y: f64,
+    pub width: f64,
+    pub height: f64,
 }
 
 /// A console message captured from the page.

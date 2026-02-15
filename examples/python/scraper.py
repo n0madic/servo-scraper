@@ -75,9 +75,9 @@ def load_library(lib_path):
     """Load the shared library and set up function signatures."""
     lib = ctypes.CDLL(lib_path)
 
-    # page_new(width, height, timeout, wait, fullpage) -> *ServoPage
+    # page_new(width, height, timeout, wait, fullpage, user_agent) -> *ServoPage
     lib.page_new.restype = c_void_p
-    lib.page_new.argtypes = [c_uint32, c_uint32, c_uint64, c_double, c_int]
+    lib.page_new.argtypes = [c_uint32, c_uint32, c_uint64, c_double, c_int, c_char_p]
 
     # page_free(page)
     lib.page_free.restype = None
@@ -186,7 +186,7 @@ def main():
 
     # 1. Create page
     print("Creating page...", file=sys.stderr)
-    page = lib.page_new(1280, 720, 30, 2.0, 0)
+    page = lib.page_new(1280, 720, 30, 2.0, 0, None)
     if not page:
         print("Error: failed to create page", file=sys.stderr)
         sys.exit(1)

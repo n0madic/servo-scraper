@@ -40,4 +40,4 @@ mod types;
 
 pub use engine::PageEngine;
 pub use page::Page;
-pub use types::{ConsoleMessage, NetworkRequest, PageError, PageOptions};
+pub use types::{ConsoleMessage, ElementRect, NetworkRequest, PageError, PageOptions};

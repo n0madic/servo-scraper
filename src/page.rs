@@ -9,7 +9,7 @@ use std::sync::mpsc;
 use std::thread;
 
 use crate::engine::PageEngine;
-use crate::types::{ConsoleMessage, NetworkRequest, PageError, PageOptions};
+use crate::types::{ConsoleMessage, ElementRect, NetworkRequest, PageError, PageOptions};
 
 /// Commands sent from the `Page` handle to the background thread.
 enum Command {
@@ -86,6 +86,53 @@ enum Command {
         x: f32,
         y: f32,
         response: mpsc::Sender<Result<(), PageError>>,
+    },
+    // Cookies
+    GetCookies {
+        response: mpsc::Sender<Result<String, PageError>>,
+    },
+    SetCookie {
+        cookie: String,
+        response: mpsc::Sender<Result<(), PageError>>,
+    },
+    ClearCookies {
+        response: mpsc::Sender<Result<(), PageError>>,
+    },
+    // Request interception
+    BlockUrls {
+        patterns: Vec<String>,
+        response: mpsc::Sender<()>,
+    },
+    ClearBlockedUrls {
+        response: mpsc::Sender<()>,
+    },
+    // Navigation
+    Reload {
+        response: mpsc::Sender<Result<(), PageError>>,
+    },
+    GoBack {
+        response: mpsc::Sender<Result<bool, PageError>>,
+    },
+    GoForward {
+        response: mpsc::Sender<Result<bool, PageError>>,
+    },
+    // Element info
+    ElementRect {
+        selector: String,
+        response: mpsc::Sender<Result<ElementRect, PageError>>,
+    },
+    ElementText {
+        selector: String,
+        response: mpsc::Sender<Result<String, PageError>>,
+    },
+    ElementAttribute {
+        selector: String,
+        attribute: String,
+        response: mpsc::Sender<Result<Option<String>, PageError>>,
+    },
+    ElementHtml {
+        selector: String,
+        response: mpsc::Sender<Result<String, PageError>>,
     },
     Shutdown,
 }
@@ -188,6 +235,48 @@ impl Page {
                     }
                     Command::MouseMove { x, y, response } => {
                         let _ = response.send(engine.mouse_move(x, y));
+                    }
+                    Command::GetCookies { response } => {
+                        let _ = response.send(engine.get_cookies());
+                    }
+                    Command::SetCookie { cookie, response } => {
+                        let _ = response.send(engine.set_cookie(&cookie));
+                    }
+                    Command::ClearCookies { response } => {
+                        let _ = response.send(engine.clear_cookies());
+                    }
+                    Command::BlockUrls { patterns, response } => {
+                        engine.block_urls(patterns);
+                        let _ = response.send(());
+                    }
+                    Command::ClearBlockedUrls { response } => {
+                        engine.clear_blocked_urls();
+                        let _ = response.send(());
+                    }
+                    Command::Reload { response } => {
+                        let _ = response.send(engine.reload());
+                    }
+                    Command::GoBack { response } => {
+                        let _ = response.send(engine.go_back());
+                    }
+                    Command::GoForward { response } => {
+                        let _ = response.send(engine.go_forward());
+                    }
+                    Command::ElementRect { selector, response } => {
+                        let _ = response.send(engine.element_rect(&selector));
+                    }
+                    Command::ElementText { selector, response } => {
+                        let _ = response.send(engine.element_text(&selector));
+                    }
+                    Command::ElementAttribute {
+                        selector,
+                        attribute,
+                        response,
+                    } => {
+                        let _ = response.send(engine.element_attribute(&selector, &attribute));
+                    }
+                    Command::ElementHtml { selector, response } => {
+                        let _ = response.send(engine.element_html(&selector));
                     }
                     Command::Shutdown => break,
                 }
@@ -320,6 +409,74 @@ impl Page {
 
     pub fn mouse_move(&self, x: f32, y: f32) -> Result<(), PageError> {
         self.send_cmd(|response| Command::MouseMove { x, y, response })?
+    }
+
+    pub fn get_cookies(&self) -> Result<String, PageError> {
+        self.send_cmd(|response| Command::GetCookies { response })?
+    }
+
+    pub fn set_cookie(&self, cookie: &str) -> Result<(), PageError> {
+        self.send_cmd(|response| Command::SetCookie {
+            cookie: cookie.to_string(),
+            response,
+        })?
+    }
+
+    pub fn clear_cookies(&self) -> Result<(), PageError> {
+        self.send_cmd(|response| Command::ClearCookies { response })?
+    }
+
+    pub fn block_urls(&self, patterns: Vec<String>) {
+        let _ = self.send_cmd(|response| Command::BlockUrls { patterns, response });
+    }
+
+    pub fn clear_blocked_urls(&self) {
+        let _ = self.send_cmd(|response| Command::ClearBlockedUrls { response });
+    }
+
+    pub fn reload(&self) -> Result<(), PageError> {
+        self.send_cmd(|response| Command::Reload { response })?
+    }
+
+    pub fn go_back(&self) -> Result<bool, PageError> {
+        self.send_cmd(|response| Command::GoBack { response })?
+    }
+
+    pub fn go_forward(&self) -> Result<bool, PageError> {
+        self.send_cmd(|response| Command::GoForward { response })?
+    }
+
+    pub fn element_rect(&self, selector: &str) -> Result<ElementRect, PageError> {
+        self.send_cmd(|response| Command::ElementRect {
+            selector: selector.to_string(),
+            response,
+        })?
+    }
+
+    pub fn element_text(&self, selector: &str) -> Result<String, PageError> {
+        self.send_cmd(|response| Command::ElementText {
+            selector: selector.to_string(),
+            response,
+        })?
+    }
+
+    pub fn element_attribute(
+        &self,
+        selector: &str,
+        attribute: &str,
+    ) -> Result<Option<String>, PageError> {
+        self.send_cmd(|response| Command::ElementAttribute {
+            selector: selector.to_string(),
+            attribute: attribute.to_string(),
+            response,
+        })?
+    }
+
+    pub fn element_html(&self, selector: &str) -> Result<String, PageError> {
+        self.send_cmd(|response| Command::ElementHtml {
+            selector: selector.to_string(),
+            response,
+        })?
     }
 }
 

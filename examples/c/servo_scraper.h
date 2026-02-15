@@ -10,7 +10,7 @@
  * The page handle internally runs Servo on a dedicated thread.
  *
  * Usage:
- *   ServoPage *p = page_new(1280, 720, 30, 2.0, 0);
+ *   ServoPage *p = page_new(1280, 720, 30, 2.0, 0, NULL);
  *   page_open(p, "https://example.com");
  *   uint8_t *png; size_t png_len;
  *   if (page_screenshot(p, &png, &png_len) == PAGE_OK) {
@@ -50,15 +50,16 @@ typedef struct ServoPage ServoPage;
 /**
  * Create a new page instance.
  *
- * @param width     Viewport width in pixels.
- * @param height    Viewport height in pixels.
- * @param timeout   Maximum page load time in seconds.
- * @param wait      Post-load JS settle time in seconds.
- * @param fullpage  Non-zero to capture full scrollable page.
+ * @param width      Viewport width in pixels.
+ * @param height     Viewport height in pixels.
+ * @param timeout    Maximum page load time in seconds.
+ * @param wait       Post-load JS settle time in seconds.
+ * @param fullpage   Non-zero to capture full scrollable page.
+ * @param user_agent Custom User-Agent string, or NULL for default.
  * @return Opaque handle, or NULL on failure. Must be freed with page_free().
  */
 ServoPage *page_new(uint32_t width, uint32_t height, uint64_t timeout,
-                     double wait, int fullpage);
+                     double wait, int fullpage, const char *user_agent);
 
 /**
  * Destroy a page instance. Safe to call with NULL.
@@ -190,6 +191,79 @@ int page_key_press(ServoPage *page, const char *key_name);
  * Move the mouse to the given device coordinates.
  */
 int page_mouse_move(ServoPage *page, float x, float y);
+
+/* ── Cookies ───────────────────────────────────────────────────────── */
+
+/**
+ * Get cookies for the current page.
+ * Free the result with page_string_free().
+ */
+int page_get_cookies(ServoPage *page, char **out_cookies, size_t *out_len);
+
+/**
+ * Set a cookie via document.cookie.
+ */
+int page_set_cookie(ServoPage *page, const char *cookie);
+
+/**
+ * Clear all cookies for the current page.
+ */
+int page_clear_cookies(ServoPage *page);
+
+/* ── Request interception ──────────────────────────────────────────── */
+
+/**
+ * Set URL patterns to block (comma-separated). Pass NULL to clear.
+ */
+int page_block_urls(ServoPage *page, const char *patterns);
+
+/* ── Navigation (extended) ─────────────────────────────────────────── */
+
+/**
+ * Reload the current page.
+ */
+int page_reload(ServoPage *page);
+
+/**
+ * Navigate back in history. Returns PAGE_ERR_NO_PAGE if no history.
+ */
+int page_go_back(ServoPage *page);
+
+/**
+ * Navigate forward in history. Returns PAGE_ERR_NO_PAGE if no forward history.
+ */
+int page_go_forward(ServoPage *page);
+
+/* ── Element info ──────────────────────────────────────────────────── */
+
+/**
+ * Get the bounding rectangle of an element as JSON.
+ * Free the result with page_string_free().
+ */
+int page_element_rect(ServoPage *page, const char *selector,
+                       char **out_json, size_t *out_len);
+
+/**
+ * Get the text content of an element.
+ * Free the result with page_string_free().
+ */
+int page_element_text(ServoPage *page, const char *selector,
+                       char **out_text, size_t *out_len);
+
+/**
+ * Get an attribute value of an element.
+ * Free the result with page_string_free().
+ */
+int page_element_attribute(ServoPage *page, const char *selector,
+                            const char *attribute,
+                            char **out_value, size_t *out_len);
+
+/**
+ * Get the outer HTML of an element.
+ * Free the result with page_string_free().
+ */
+int page_element_html(ServoPage *page, const char *selector,
+                       char **out_html, size_t *out_len);
 
 /* ── Memory ────────────────────────────────────────────────────────── */
 

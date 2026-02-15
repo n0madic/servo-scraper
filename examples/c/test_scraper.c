@@ -51,7 +51,7 @@ int main(int argc, char *argv[]) {
 
     /* 1. Create page (1280x720, 30s timeout, 2s settle, no fullpage) */
     fprintf(stderr, "Creating page...\n");
-    ServoPage *page = page_new(1280, 720, 30, 2.0, 0);
+    ServoPage *page = page_new(1280, 720, 30, 2.0, 0, NULL);
     if (!page) {
         fprintf(stderr, "Error: failed to create page\n");
         return 1;
