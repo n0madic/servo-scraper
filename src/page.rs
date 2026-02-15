@@ -9,26 +9,26 @@ use std::sync::mpsc;
 use std::thread;
 
 use crate::engine::PageEngine;
-use crate::types::{ConsoleMessage, NetworkRequest, ScraperError, ScraperOptions};
+use crate::types::{ConsoleMessage, NetworkRequest, PageError, PageOptions};
 
 /// Commands sent from the `Page` handle to the background thread.
 enum Command {
     Open {
         url: String,
-        response: mpsc::Sender<Result<(), ScraperError>>,
+        response: mpsc::Sender<Result<(), PageError>>,
     },
     Evaluate {
         script: String,
-        response: mpsc::Sender<Result<String, ScraperError>>,
+        response: mpsc::Sender<Result<String, PageError>>,
     },
     Screenshot {
-        response: mpsc::Sender<Result<Vec<u8>, ScraperError>>,
+        response: mpsc::Sender<Result<Vec<u8>, PageError>>,
     },
     ScreenshotFullpage {
-        response: mpsc::Sender<Result<Vec<u8>, ScraperError>>,
+        response: mpsc::Sender<Result<Vec<u8>, PageError>>,
     },
     Html {
-        response: mpsc::Sender<Result<String, ScraperError>>,
+        response: mpsc::Sender<Result<String, PageError>>,
     },
     Url {
         response: mpsc::Sender<Option<String>>,
@@ -49,12 +49,12 @@ enum Command {
     WaitForSelector {
         selector: String,
         timeout: u64,
-        response: mpsc::Sender<Result<(), ScraperError>>,
+        response: mpsc::Sender<Result<(), PageError>>,
     },
     WaitForCondition {
         js_expr: String,
         timeout: u64,
-        response: mpsc::Sender<Result<(), ScraperError>>,
+        response: mpsc::Sender<Result<(), PageError>>,
     },
     Wait {
         seconds: f64,
@@ -62,30 +62,30 @@ enum Command {
     },
     WaitForNavigation {
         timeout: u64,
-        response: mpsc::Sender<Result<(), ScraperError>>,
+        response: mpsc::Sender<Result<(), PageError>>,
     },
     // Phase 3: Input commands
     Click {
         x: f32,
         y: f32,
-        response: mpsc::Sender<Result<(), ScraperError>>,
+        response: mpsc::Sender<Result<(), PageError>>,
     },
     ClickSelector {
         selector: String,
-        response: mpsc::Sender<Result<(), ScraperError>>,
+        response: mpsc::Sender<Result<(), PageError>>,
     },
     TypeText {
         text: String,
-        response: mpsc::Sender<Result<(), ScraperError>>,
+        response: mpsc::Sender<Result<(), PageError>>,
     },
     KeyPress {
         key: String,
-        response: mpsc::Sender<Result<(), ScraperError>>,
+        response: mpsc::Sender<Result<(), PageError>>,
     },
     MouseMove {
         x: f32,
         y: f32,
-        response: mpsc::Sender<Result<(), ScraperError>>,
+        response: mpsc::Sender<Result<(), PageError>>,
     },
     Shutdown,
 }
@@ -104,9 +104,9 @@ unsafe impl Sync for Page {}
 
 impl Page {
     /// Create a new thread-safe page handle.
-    pub fn new(options: ScraperOptions) -> Result<Self, ScraperError> {
+    pub fn new(options: PageOptions) -> Result<Self, PageError> {
         let (cmd_tx, cmd_rx) = mpsc::channel::<Command>();
-        let (init_tx, init_rx) = mpsc::channel::<Result<(), ScraperError>>();
+        let (init_tx, init_rx) = mpsc::channel::<Result<(), PageError>>();
 
         let thread = thread::spawn(move || {
             let mut engine = match PageEngine::new(options) {
@@ -196,7 +196,7 @@ impl Page {
 
         init_rx
             .recv()
-            .map_err(|_| ScraperError::InitFailed("background thread panicked".into()))??;
+            .map_err(|_| PageError::InitFailed("background thread panicked".into()))??;
 
         Ok(Self {
             sender: Mutex::new(cmd_tx),
@@ -207,42 +207,39 @@ impl Page {
     fn send_cmd<T>(
         &self,
         make_cmd: impl FnOnce(mpsc::Sender<T>) -> Command,
-    ) -> Result<T, ScraperError> {
+    ) -> Result<T, PageError> {
         let (resp_tx, resp_rx) = mpsc::channel();
-        let sender = self
-            .sender
-            .lock()
-            .map_err(|_| ScraperError::ChannelClosed)?;
+        let sender = self.sender.lock().map_err(|_| PageError::ChannelClosed)?;
         sender
             .send(make_cmd(resp_tx))
-            .map_err(|_| ScraperError::ChannelClosed)?;
+            .map_err(|_| PageError::ChannelClosed)?;
         drop(sender);
-        resp_rx.recv().map_err(|_| ScraperError::ChannelClosed)
+        resp_rx.recv().map_err(|_| PageError::ChannelClosed)
     }
 
-    pub fn open(&self, url: &str) -> Result<(), ScraperError> {
+    pub fn open(&self, url: &str) -> Result<(), PageError> {
         self.send_cmd(|response| Command::Open {
             url: url.to_string(),
             response,
         })?
     }
 
-    pub fn evaluate(&self, script: &str) -> Result<String, ScraperError> {
+    pub fn evaluate(&self, script: &str) -> Result<String, PageError> {
         self.send_cmd(|response| Command::Evaluate {
             script: script.to_string(),
             response,
         })?
     }
 
-    pub fn screenshot(&self) -> Result<Vec<u8>, ScraperError> {
+    pub fn screenshot(&self) -> Result<Vec<u8>, PageError> {
         self.send_cmd(|response| Command::Screenshot { response })?
     }
 
-    pub fn screenshot_fullpage(&self) -> Result<Vec<u8>, ScraperError> {
+    pub fn screenshot_fullpage(&self) -> Result<Vec<u8>, PageError> {
         self.send_cmd(|response| Command::ScreenshotFullpage { response })?
     }
 
-    pub fn html(&self) -> Result<String, ScraperError> {
+    pub fn html(&self) -> Result<String, PageError> {
         self.send_cmd(|response| Command::Html { response })?
     }
 
@@ -272,7 +269,7 @@ impl Page {
         let _ = self.send_cmd(|response| Command::Close { response });
     }
 
-    pub fn wait_for_selector(&self, selector: &str, timeout: u64) -> Result<(), ScraperError> {
+    pub fn wait_for_selector(&self, selector: &str, timeout: u64) -> Result<(), PageError> {
         self.send_cmd(|response| Command::WaitForSelector {
             selector: selector.to_string(),
             timeout,
@@ -280,7 +277,7 @@ impl Page {
         })?
     }
 
-    pub fn wait_for_condition(&self, js_expr: &str, timeout: u64) -> Result<(), ScraperError> {
+    pub fn wait_for_condition(&self, js_expr: &str, timeout: u64) -> Result<(), PageError> {
         self.send_cmd(|response| Command::WaitForCondition {
             js_expr: js_expr.to_string(),
             timeout,
@@ -292,36 +289,36 @@ impl Page {
         let _ = self.send_cmd(|response| Command::Wait { seconds, response });
     }
 
-    pub fn wait_for_navigation(&self, timeout: u64) -> Result<(), ScraperError> {
+    pub fn wait_for_navigation(&self, timeout: u64) -> Result<(), PageError> {
         self.send_cmd(|response| Command::WaitForNavigation { timeout, response })?
     }
 
-    pub fn click(&self, x: f32, y: f32) -> Result<(), ScraperError> {
+    pub fn click(&self, x: f32, y: f32) -> Result<(), PageError> {
         self.send_cmd(|response| Command::Click { x, y, response })?
     }
 
-    pub fn click_selector(&self, selector: &str) -> Result<(), ScraperError> {
+    pub fn click_selector(&self, selector: &str) -> Result<(), PageError> {
         self.send_cmd(|response| Command::ClickSelector {
             selector: selector.to_string(),
             response,
         })?
     }
 
-    pub fn type_text(&self, text: &str) -> Result<(), ScraperError> {
+    pub fn type_text(&self, text: &str) -> Result<(), PageError> {
         self.send_cmd(|response| Command::TypeText {
             text: text.to_string(),
             response,
         })?
     }
 
-    pub fn key_press(&self, key: &str) -> Result<(), ScraperError> {
+    pub fn key_press(&self, key: &str) -> Result<(), PageError> {
         self.send_cmd(|response| Command::KeyPress {
             key: key.to_string(),
             response,
         })?
     }
 
-    pub fn mouse_move(&self, x: f32, y: f32) -> Result<(), ScraperError> {
+    pub fn mouse_move(&self, x: f32, y: f32) -> Result<(), PageError> {
         self.send_cmd(|response| Command::MouseMove { x, y, response })?
     }
 }

@@ -37,40 +37,40 @@ import (
 
 // Error codes matching servo_scraper.h
 const (
-	scraperOK            = C.SCRAPER_OK
-	scraperErrInit       = C.SCRAPER_ERR_INIT
-	scraperErrLoad       = C.SCRAPER_ERR_LOAD
-	scraperErrTimeout    = C.SCRAPER_ERR_TIMEOUT
-	scraperErrJS         = C.SCRAPER_ERR_JS
-	scraperErrScreenshot = C.SCRAPER_ERR_SCREENSHOT
-	scraperErrChannel    = C.SCRAPER_ERR_CHANNEL
-	scraperErrNullPtr    = C.SCRAPER_ERR_NULL_PTR
-	scraperErrNoPage     = C.SCRAPER_ERR_NO_PAGE
-	scraperErrSelector   = C.SCRAPER_ERR_SELECTOR
+	pageOK            = C.PAGE_OK
+	pageErrInit       = C.PAGE_ERR_INIT
+	pageErrLoad       = C.PAGE_ERR_LOAD
+	pageErrTimeout    = C.PAGE_ERR_TIMEOUT
+	pageErrJS         = C.PAGE_ERR_JS
+	pageErrScreenshot = C.PAGE_ERR_SCREENSHOT
+	pageErrChannel    = C.PAGE_ERR_CHANNEL
+	pageErrNullPtr    = C.PAGE_ERR_NULL_PTR
+	pageErrNoPage     = C.PAGE_ERR_NO_PAGE
+	pageErrSelector   = C.PAGE_ERR_SELECTOR
 )
 
 // errorName returns a human-readable name for error codes
 func errorName(code C.int) string {
 	switch code {
-	case scraperOK:
+	case pageOK:
 		return "OK"
-	case scraperErrInit:
+	case pageErrInit:
 		return "INIT_FAILED"
-	case scraperErrLoad:
+	case pageErrLoad:
 		return "LOAD_FAILED"
-	case scraperErrTimeout:
+	case pageErrTimeout:
 		return "TIMEOUT"
-	case scraperErrJS:
+	case pageErrJS:
 		return "JS_ERROR"
-	case scraperErrScreenshot:
+	case pageErrScreenshot:
 		return "SCREENSHOT_FAILED"
-	case scraperErrChannel:
+	case pageErrChannel:
 		return "CHANNEL_CLOSED"
-	case scraperErrNullPtr:
+	case pageErrNullPtr:
 		return "NULL_POINTER"
-	case scraperErrNoPage:
+	case pageErrNoPage:
 		return "NO_PAGE"
-	case scraperErrSelector:
+	case pageErrSelector:
 		return "SELECTOR_NOT_FOUND"
 	default:
 		return "UNKNOWN"
@@ -112,7 +112,7 @@ func main() {
 	defer C.free(unsafe.Pointer(cURL))
 
 	rc := C.page_open(page, cURL)
-	if rc != scraperOK {
+	if rc != pageOK {
 		fmt.Fprintf(os.Stderr, "Error: page_open failed: %s (%d)\n", errorName(rc), rc)
 		os.Exit(1)
 	}
@@ -125,7 +125,7 @@ func main() {
 	defer C.free(unsafe.Pointer(cScript))
 
 	rc = C.page_evaluate(page, cScript, &titleData, &titleLen)
-	if rc == scraperOK {
+	if rc == pageOK {
 		title := C.GoStringN(titleData, C.int(titleLen))
 		C.page_string_free(titleData)
 		fmt.Fprintf(os.Stderr, "Page title: %s\n", title)
@@ -137,7 +137,7 @@ func main() {
 	var pngLen C.size_t
 
 	rc = C.page_screenshot(page, &pngData, &pngLen)
-	if rc != scraperOK {
+	if rc != pageOK {
 		fmt.Fprintf(os.Stderr, "Error: screenshot failed: %s (%d)\n", errorName(rc), rc)
 	} else {
 		pngBytes := C.GoBytes(unsafe.Pointer(pngData), C.int(pngLen))
@@ -156,7 +156,7 @@ func main() {
 	var htmlLen C.size_t
 
 	rc = C.page_html(page, &htmlData, &htmlLen)
-	if rc != scraperOK {
+	if rc != pageOK {
 		fmt.Fprintf(os.Stderr, "Error: HTML capture failed: %s (%d)\n", errorName(rc), rc)
 	} else {
 		htmlStr := C.GoStringN(htmlData, C.int(htmlLen))

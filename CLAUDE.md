@@ -46,7 +46,7 @@ The library is organized into four modules under `src/`:
 ```
 src/
   lib.rs      Module declarations + re-exports
-  types.rs    Shared public types (ScraperOptions, ConsoleMessage, NetworkRequest, ScraperError)
+  types.rs    Shared public types (PageOptions, ConsoleMessage, NetworkRequest, PageError)
   engine.rs   PageEngine + all internal utilities (event loop, delegate, capture helpers)
   page.rs     Page (thread-safe wrapper) + Command enum
   ffi.rs      All extern "C" functions + error codes
@@ -102,22 +102,22 @@ Three architectural layers (dependency graph: `types ← engine ← page ← ffi
 
 - `page_screenshot` / `page_screenshot_fullpage` return a heap-allocated `Box<[u8]>` — caller frees with `page_buffer_free(data, len)`.
 - All string-returning functions (`page_html`, `page_evaluate`, `page_url`, `page_title`, `page_console_messages`, `page_network_requests`) return a `CString` — caller frees with `page_string_free(ptr)`.
-- All FFI functions are NULL-safe and return `SCRAPER_ERR_NULL_PTR` (7) for null arguments.
+- All FFI functions are NULL-safe and return `PAGE_ERR_NULL_PTR` (7) for null arguments.
 
 ### Error Codes
 
 | Code | Name | Meaning |
 |---|---|---|
-| 0 | `SCRAPER_OK` | Success |
-| 1 | `SCRAPER_ERR_INIT` | Initialization failed |
-| 2 | `SCRAPER_ERR_LOAD` | Page load failed |
-| 3 | `SCRAPER_ERR_TIMEOUT` | Operation timed out |
-| 4 | `SCRAPER_ERR_JS` | JavaScript error |
-| 5 | `SCRAPER_ERR_SCREENSHOT` | Screenshot failed |
-| 6 | `SCRAPER_ERR_CHANNEL` | Internal channel closed |
-| 7 | `SCRAPER_ERR_NULL_PTR` | NULL pointer argument |
-| 8 | `SCRAPER_ERR_NO_PAGE` | No page open |
-| 9 | `SCRAPER_ERR_SELECTOR` | CSS selector not found |
+| 0 | `PAGE_OK` | Success |
+| 1 | `PAGE_ERR_INIT` | Initialization failed |
+| 2 | `PAGE_ERR_LOAD` | Page load failed |
+| 3 | `PAGE_ERR_TIMEOUT` | Operation timed out |
+| 4 | `PAGE_ERR_JS` | JavaScript error |
+| 5 | `PAGE_ERR_SCREENSHOT` | Screenshot failed |
+| 6 | `PAGE_ERR_CHANNEL` | Internal channel closed |
+| 7 | `PAGE_ERR_NULL_PTR` | NULL pointer argument |
+| 8 | `PAGE_ERR_NO_PAGE` | No page open |
+| 9 | `PAGE_ERR_SELECTOR` | CSS selector not found |
 
 ## Dependencies
 

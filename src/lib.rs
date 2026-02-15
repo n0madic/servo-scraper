@@ -15,9 +15,9 @@
 //! # Example (Rust, direct)
 //!
 //! ```no_run
-//! use servo_scraper::{PageEngine, ScraperOptions};
+//! use servo_scraper::{PageEngine, PageOptions};
 //!
-//! let mut engine = PageEngine::new(ScraperOptions::default()).unwrap();
+//! let mut engine = PageEngine::new(PageOptions::default()).unwrap();
 //! engine.open("https://example.com").unwrap();
 //! let html = engine.html().unwrap();
 //! let png = engine.screenshot().unwrap();
@@ -26,9 +26,9 @@
 //! # Example (thread-safe / FFI)
 //!
 //! ```no_run
-//! use servo_scraper::{Page, ScraperOptions};
+//! use servo_scraper::{Page, PageOptions};
 //!
-//! let page = Page::new(ScraperOptions::default()).unwrap();
+//! let page = Page::new(PageOptions::default()).unwrap();
 //! page.open("https://example.com").unwrap();
 //! let png = page.screenshot().unwrap();
 //! ```
@@ -40,4 +40,4 @@ mod types;
 
 pub use engine::PageEngine;
 pub use page::Page;
-pub use types::{ConsoleMessage, NetworkRequest, ScraperError, ScraperOptions};
+pub use types::{ConsoleMessage, NetworkRequest, PageError, PageOptions};

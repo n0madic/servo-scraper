@@ -18,7 +18,7 @@ use std::process;
 use bpaf::Bpaf;
 use image::ImageFormat;
 use log::error;
-use servo_scraper::{PageEngine, ScraperOptions};
+use servo_scraper::{PageEngine, PageOptions};
 use url::Url;
 
 // ---------------------------------------------------------------------------
@@ -85,7 +85,7 @@ fn main() {
         process::exit(1);
     }
 
-    let options = ScraperOptions {
+    let options = PageOptions {
         width: config.width,
         height: config.height,
         timeout: config.timeout,

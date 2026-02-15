@@ -13,7 +13,7 @@
  *   ServoPage *p = page_new(1280, 720, 30, 2.0, 0);
  *   page_open(p, "https://example.com");
  *   uint8_t *png; size_t png_len;
- *   if (page_screenshot(p, &png, &png_len) == SCRAPER_OK) {
+ *   if (page_screenshot(p, &png, &png_len) == PAGE_OK) {
  *       // write png to file...
  *       page_buffer_free(png, png_len);
  *   }
@@ -31,16 +31,16 @@ extern "C" {
 #endif
 
 /* Error codes */
-#define SCRAPER_OK              0
-#define SCRAPER_ERR_INIT        1
-#define SCRAPER_ERR_LOAD        2
-#define SCRAPER_ERR_TIMEOUT     3
-#define SCRAPER_ERR_JS          4
-#define SCRAPER_ERR_SCREENSHOT  5
-#define SCRAPER_ERR_CHANNEL     6
-#define SCRAPER_ERR_NULL_PTR    7
-#define SCRAPER_ERR_NO_PAGE     8
-#define SCRAPER_ERR_SELECTOR    9
+#define PAGE_OK              0
+#define PAGE_ERR_INIT        1
+#define PAGE_ERR_LOAD        2
+#define PAGE_ERR_TIMEOUT     3
+#define PAGE_ERR_JS          4
+#define PAGE_ERR_SCREENSHOT  5
+#define PAGE_ERR_CHANNEL     6
+#define PAGE_ERR_NULL_PTR    7
+#define PAGE_ERR_NO_PAGE     8
+#define PAGE_ERR_SELECTOR    9
 
 /* Opaque handle */
 typedef struct ServoPage ServoPage;
@@ -70,7 +70,7 @@ void page_free(ServoPage *page);
 /**
  * Open a URL in the page (creates or navigates the WebView).
  *
- * @return SCRAPER_OK on success, or an error code.
+ * @return PAGE_OK on success, or an error code.
  */
 int page_open(ServoPage *page, const char *url);
 
@@ -82,7 +82,7 @@ int page_open(ServoPage *page, const char *url);
  * On success, *out_json is set to a heap-allocated null-terminated string
  * and *out_len to its length. Free with page_string_free().
  *
- * @return SCRAPER_OK on success, or an error code.
+ * @return PAGE_OK on success, or an error code.
  */
 int page_evaluate(ServoPage *page, const char *script,
                    char **out_json, size_t *out_len);
@@ -93,14 +93,14 @@ int page_evaluate(ServoPage *page, const char *script,
  * On success, *out_data is set to a heap-allocated PNG buffer and *out_len
  * to its size in bytes. Free with page_buffer_free().
  *
- * @return SCRAPER_OK on success, or an error code.
+ * @return PAGE_OK on success, or an error code.
  */
 int page_screenshot(ServoPage *page, uint8_t **out_data, size_t *out_len);
 
 /**
  * Take a full-page screenshot (captures full scrollable page).
  *
- * @return SCRAPER_OK on success, or an error code.
+ * @return PAGE_OK on success, or an error code.
  */
 int page_screenshot_fullpage(ServoPage *page, uint8_t **out_data, size_t *out_len);
 
@@ -110,7 +110,7 @@ int page_screenshot_fullpage(ServoPage *page, uint8_t **out_data, size_t *out_le
  * On success, *out_html is set to a heap-allocated null-terminated string
  * and *out_len to its length. Free with page_string_free().
  *
- * @return SCRAPER_OK on success, or an error code.
+ * @return PAGE_OK on success, or an error code.
  */
 int page_html(ServoPage *page, char **out_html, size_t *out_len);
 

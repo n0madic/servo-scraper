@@ -38,11 +38,11 @@ CGO_ENABLED=1 DYLD_LIBRARY_PATH=target/release go run examples/go/scraper.go htt
 
 1. Uses CGo with `#cgo LDFLAGS` to link against `libservo_scraper.dylib`
 2. Includes the C header via `#cgo CFLAGS: -I../c`
-3. Calls `scraper_new()` to create a thread-safe scraper handle
-4. Calls `scraper_screenshot()` / `scraper_html()` to capture data
+3. Calls `page_new()` to create a thread-safe page handle
+4. Calls `page_open()` to navigate, then `page_screenshot()` / `page_html()` to capture data
 5. Copies data from C using `C.GoBytes()` and `C.GoStringN()` before freeing
-6. Frees buffers with `scraper_buffer_free()` / `scraper_string_free()`
-7. Destroys the scraper with `scraper_free()` via defer
+6. Frees buffers with `page_buffer_free()` / `page_string_free()`
+7. Destroys the page with `page_free()` via defer
 
 ## API Quick Reference
 
@@ -58,31 +58,33 @@ package main
 import "C"
 import "unsafe"
 
-// Create scraper (width, height, timeout_sec, wait_sec, fullpage)
-scraper := C.scraper_new(1280, 720, 30, 2.0, 0)
-defer C.scraper_free(scraper)
+// Create page (width, height, timeout_sec, wait_sec, fullpage)
+page := C.page_new(1280, 720, 30, 2.0, 0)
+defer C.page_free(page)
+
+// Open URL
+cURL := C.CString("https://example.com")
+defer C.free(unsafe.Pointer(cURL))
+C.page_open(page, cURL)
 
 // Screenshot → PNG bytes
 var pngData *C.uint8_t
 var pngLen C.size_t
-cURL := C.CString("https://example.com")
-defer C.free(unsafe.Pointer(cURL))
 
-rc := C.scraper_screenshot(scraper, cURL, &pngData, &pngLen)
-if rc == C.SCRAPER_OK {
-    // Copy data before freeing
+rc := C.page_screenshot(page, &pngData, &pngLen)
+if rc == C.PAGE_OK {
     pngBytes := C.GoBytes(unsafe.Pointer(pngData), C.int(pngLen))
-    C.scraper_buffer_free(pngData, pngLen)
+    C.page_buffer_free(pngData, pngLen)
     // Use pngBytes...
 }
 
 // HTML → string
 var htmlData *C.char
 var htmlLen C.size_t
-rc = C.scraper_html(scraper, cURL, &htmlData, &htmlLen)
-if rc == C.SCRAPER_OK {
+rc = C.page_html(page, &htmlData, &htmlLen)
+if rc == C.PAGE_OK {
     htmlStr := C.GoStringN(htmlData, C.int(htmlLen))
-    C.scraper_string_free(htmlData)
+    C.page_string_free(htmlData)
     // Use htmlStr...
 }
 ```
@@ -91,14 +93,16 @@ if rc == C.SCRAPER_OK {
 
 | Constant | Name | Value |
 |---|---|---|
-| `SCRAPER_OK` | Success | 0 |
-| `SCRAPER_ERR_INIT` | Initialization failed | 1 |
-| `SCRAPER_ERR_LOAD` | Page load failed | 2 |
-| `SCRAPER_ERR_TIMEOUT` | Timeout | 3 |
-| `SCRAPER_ERR_JS` | JavaScript error | 4 |
-| `SCRAPER_ERR_SCREENSHOT` | Screenshot failed | 5 |
-| `SCRAPER_ERR_CHANNEL` | Channel closed | 6 |
-| `SCRAPER_ERR_NULL_PTR` | Null pointer | 7 |
+| `PAGE_OK` | Success | 0 |
+| `PAGE_ERR_INIT` | Initialization failed | 1 |
+| `PAGE_ERR_LOAD` | Page load failed | 2 |
+| `PAGE_ERR_TIMEOUT` | Timeout | 3 |
+| `PAGE_ERR_JS` | JavaScript error | 4 |
+| `PAGE_ERR_SCREENSHOT` | Screenshot failed | 5 |
+| `PAGE_ERR_CHANNEL` | Channel closed | 6 |
+| `PAGE_ERR_NULL_PTR` | Null pointer | 7 |
+| `PAGE_ERR_NO_PAGE` | No page open | 8 |
+| `PAGE_ERR_SELECTOR` | CSS selector not found | 9 |
 
 ## Important Notes
 
@@ -106,7 +110,7 @@ if rc == C.SCRAPER_OK {
 - **Library path**: Use `DYLD_LIBRARY_PATH` (macOS) or `LD_LIBRARY_PATH` (Linux) to point to `target/release/`
 - **Memory safety**: Always copy data with `C.GoBytes()` or `C.GoStringN()` before freeing C memory
 - **Cleanup**: Use `defer` to ensure proper cleanup of C resources
-- **Thread safety**: The scraper handle is thread-safe and can be used from multiple goroutines
+- **Thread safety**: The page handle is thread-safe and can be used from multiple goroutines
 
 ## Building a Binary
 

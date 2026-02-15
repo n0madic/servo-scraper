@@ -29,7 +29,7 @@ const libName =
 const libPath = join(projectRoot, "target", "release", libName);
 
 // Error codes
-const SCRAPER_OK = 0;
+const PAGE_OK = 0;
 const ERROR_NAMES = {
   0: "OK",
   1: "INIT_FAILED",
@@ -95,7 +95,7 @@ try {
   // 2. Open URL
   console.error(`Opening ${url}...`);
   let rc = page_open(page, url);
-  if (rc !== SCRAPER_OK) {
+  if (rc !== PAGE_OK) {
     console.error(
       `Error: page_open failed: ${ERROR_NAMES[rc] || "UNKNOWN"} (${rc})`,
     );
@@ -107,7 +107,7 @@ try {
   const titlePtr = [null];
   const titleLen = [0];
   rc = page_evaluate(page, "document.title", titlePtr, titleLen);
-  if (rc === SCRAPER_OK) {
+  if (rc === PAGE_OK) {
     const rawBuf = koffi.decode(titlePtr[0], koffi.array("uint8_t", titleLen[0]));
     page_string_free(titlePtr[0]);
     const title = Buffer.from(rawBuf).toString("utf-8");
@@ -119,7 +119,7 @@ try {
   const pngDataPtr = [null];
   const pngLen = [0];
   rc = page_screenshot(page, pngDataPtr, pngLen);
-  if (rc !== SCRAPER_OK) {
+  if (rc !== PAGE_OK) {
     console.error(
       `Error: screenshot failed: ${ERROR_NAMES[rc] || "UNKNOWN"} (${rc})`,
     );
@@ -135,7 +135,7 @@ try {
   const htmlDataPtr = [null];
   const htmlLen = [0];
   rc = page_html(page, htmlDataPtr, htmlLen);
-  if (rc !== SCRAPER_OK) {
+  if (rc !== PAGE_OK) {
     console.error(
       `Error: HTML capture failed: ${ERROR_NAMES[rc] || "UNKNOWN"} (${rc})`,
     );

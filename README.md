@@ -93,10 +93,10 @@ servo-scraper --eval "document.title" --screenshot page.png --html page.html --w
 ## Rust API
 
 ```rust
-use servo_scraper::{PageEngine, ScraperOptions};
+use servo_scraper::{PageEngine, PageOptions};
 
 // Layer 1: Single-threaded (for CLI / direct use)
-let mut engine = PageEngine::new(ScraperOptions::default()).unwrap();
+let mut engine = PageEngine::new(PageOptions::default()).unwrap();
 engine.open("https://example.com").unwrap();
 let title = engine.evaluate("document.title").unwrap();  // JSON string
 let html = engine.html().unwrap();
@@ -113,10 +113,10 @@ engine.key_press("Enter").unwrap();
 ```
 
 ```rust
-use servo_scraper::{Page, ScraperOptions};
+use servo_scraper::{Page, PageOptions};
 
 // Layer 2: Thread-safe (for FFI / multi-threaded use)
-let page = Page::new(ScraperOptions::default()).unwrap();
+let page = Page::new(PageOptions::default()).unwrap();
 page.open("https://example.com").unwrap();
 let png = page.screenshot().unwrap();
 ```

@@ -24,7 +24,7 @@ use servo::{
 };
 use url::Url;
 
-use crate::types::{ConsoleMessage, NetworkRequest, ScraperError, ScraperOptions};
+use crate::types::{ConsoleMessage, NetworkRequest, PageError, PageOptions};
 
 // ---------------------------------------------------------------------------
 // Internal: Suppress stderr from system libraries
@@ -306,7 +306,7 @@ fn eval_js(
     webview: &WebView,
     script: &str,
     timeout_secs: u64,
-) -> Result<JSValue, ScraperError> {
+) -> Result<JSValue, PageError> {
     let result: Rc<RefCell<Option<Result<JSValue, servo::JavaScriptEvaluationError>>>> =
         Rc::new(RefCell::new(None));
     let cb_result = result.clone();
@@ -322,13 +322,13 @@ fn eval_js(
         timeout_secs,
     );
     if !completed {
-        return Err(ScraperError::Timeout);
+        return Err(PageError::Timeout);
     }
 
     match result.borrow_mut().take() {
         Some(Ok(value)) => Ok(value),
-        Some(Err(e)) => Err(ScraperError::JsError(format!("{e:?}"))),
-        None => Err(ScraperError::Timeout),
+        Some(Err(e)) => Err(PageError::JsError(format!("{e:?}"))),
+        None => Err(PageError::Timeout),
     }
 }
 
@@ -337,7 +337,7 @@ fn take_screenshot_bytes(
     event_loop: &ScraperEventLoop,
     webview: &WebView,
     timeout_secs: u64,
-) -> Result<Vec<u8>, ScraperError> {
+) -> Result<Vec<u8>, PageError> {
     let result: Rc<RefCell<Option<Result<servo::RgbaImage, _>>>> = Rc::new(RefCell::new(None));
     let cb_result = result.clone();
 
@@ -352,7 +352,7 @@ fn take_screenshot_bytes(
         timeout_secs,
     );
     if !completed {
-        return Err(ScraperError::Timeout);
+        return Err(PageError::Timeout);
     }
 
     match result.borrow_mut().take() {
@@ -363,11 +363,11 @@ fn take_screenshot_bytes(
             let mut png_buf = Vec::new();
             PngEncoder::new(&mut png_buf)
                 .write_image(&rgba8, w, h, image::ExtendedColorType::Rgba8)
-                .map_err(|e| ScraperError::ScreenshotFailed(format!("PNG encoding failed: {e}")))?;
+                .map_err(|e| PageError::ScreenshotFailed(format!("PNG encoding failed: {e}")))?;
             Ok(png_buf)
         }
-        Some(Err(e)) => Err(ScraperError::ScreenshotFailed(format!("{e:?}"))),
-        None => Err(ScraperError::Timeout),
+        Some(Err(e)) => Err(PageError::ScreenshotFailed(format!("{e:?}"))),
+        None => Err(PageError::Timeout),
     }
 }
 
@@ -376,7 +376,7 @@ fn capture_html(
     event_loop: &ScraperEventLoop,
     webview: &WebView,
     timeout_secs: u64,
-) -> Result<String, ScraperError> {
+) -> Result<String, PageError> {
     match eval_js(
         servo,
         event_loop,
@@ -385,7 +385,7 @@ fn capture_html(
         timeout_secs,
     )? {
         JSValue::String(html) => Ok(html),
-        other => Err(ScraperError::JsError(format!(
+        other => Err(PageError::JsError(format!(
             "unexpected JS result type: {other:?}"
         ))),
     }
@@ -459,12 +459,12 @@ pub struct PageEngine {
     rendering_context: Rc<SoftwareRenderingContext>,
     webview: Option<WebView>,
     delegate: Rc<PageDelegate>,
-    options: ScraperOptions,
+    options: PageOptions,
 }
 
 impl PageEngine {
     /// Create a new page engine with the given options.
-    pub fn new(options: ScraperOptions) -> Result<Self, ScraperError> {
+    pub fn new(options: PageOptions) -> Result<Self, PageError> {
         resources::set(Box::new(EmbeddedResourceReader));
 
         rustls::crypto::aws_lc_rs::default_provider()
@@ -476,11 +476,11 @@ impl PageEngine {
 
         let rendering_context = Rc::new(
             SoftwareRenderingContext::new(PhysicalSize::new(options.width, options.height))
-                .map_err(|e| ScraperError::InitFailed(format!("rendering context: {e:?}")))?,
+                .map_err(|e| PageError::InitFailed(format!("rendering context: {e:?}")))?,
         );
         rendering_context
             .make_current()
-            .map_err(|e| ScraperError::InitFailed(format!("make_current: {e:?}")))?;
+            .map_err(|e| PageError::InitFailed(format!("make_current: {e:?}")))?;
 
         let servo = ServoBuilder::default().event_loop_waker(waker).build();
         servo.setup_logging();
@@ -495,14 +495,14 @@ impl PageEngine {
         })
     }
 
-    fn webview(&self) -> Result<&WebView, ScraperError> {
-        self.webview.as_ref().ok_or(ScraperError::NoPage)
+    fn webview(&self) -> Result<&WebView, PageError> {
+        self.webview.as_ref().ok_or(PageError::NoPage)
     }
 
     /// Open a URL. Creates a new WebView or navigates the existing one.
-    pub fn open(&mut self, url: &str) -> Result<(), ScraperError> {
+    pub fn open(&mut self, url: &str) -> Result<(), PageError> {
         let parsed_url =
-            Url::parse(url).map_err(|e| ScraperError::LoadFailed(format!("invalid URL: {e}")))?;
+            Url::parse(url).map_err(|e| PageError::LoadFailed(format!("invalid URL: {e}")))?;
 
         self.delegate.load_complete.set(false);
 
@@ -539,14 +539,14 @@ impl PageEngine {
         });
 
         if !loaded {
-            return Err(ScraperError::Timeout);
+            return Err(PageError::Timeout);
         }
 
         Ok(())
     }
 
     /// Evaluate JavaScript and return the result as a JSON string.
-    pub fn evaluate(&self, script: &str) -> Result<String, ScraperError> {
+    pub fn evaluate(&self, script: &str) -> Result<String, PageError> {
         let webview = self.webview()?;
         let value = eval_js(
             &self.servo,
@@ -559,13 +559,13 @@ impl PageEngine {
     }
 
     /// Take a screenshot of the current viewport (PNG bytes).
-    pub fn screenshot(&self) -> Result<Vec<u8>, ScraperError> {
+    pub fn screenshot(&self) -> Result<Vec<u8>, PageError> {
         let webview = self.webview()?;
         take_screenshot_bytes(&self.servo, &self.event_loop, webview, self.options.timeout)
     }
 
     /// Take a full-page screenshot (PNG bytes).
-    pub fn screenshot_fullpage(&self) -> Result<Vec<u8>, ScraperError> {
+    pub fn screenshot_fullpage(&self) -> Result<Vec<u8>, PageError> {
         let webview = self.webview()?;
         let js = "Math.max(document.documentElement.scrollHeight, document.body.scrollHeight)";
         if let Ok(JSValue::Number(doc_height)) = eval_js(
@@ -586,7 +586,7 @@ impl PageEngine {
                     Duration::from_secs(self.options.timeout),
                 );
                 if !got_frame {
-                    return Err(ScraperError::ScreenshotFailed(
+                    return Err(PageError::ScreenshotFailed(
                         "timed out waiting for repaint after resize".to_string(),
                     ));
                 }
@@ -604,7 +604,7 @@ impl PageEngine {
     }
 
     /// Capture the page's HTML.
-    pub fn html(&self) -> Result<String, ScraperError> {
+    pub fn html(&self) -> Result<String, PageError> {
         let webview = self.webview()?;
         capture_html(&self.servo, &self.event_loop, webview, self.options.timeout)
     }
@@ -647,7 +647,7 @@ impl PageEngine {
     // -- Phase 2: Wait mechanisms --
 
     /// Wait until a CSS selector matches an element on the page.
-    pub fn wait_for_selector(&self, selector: &str, timeout_secs: u64) -> Result<(), ScraperError> {
+    pub fn wait_for_selector(&self, selector: &str, timeout_secs: u64) -> Result<(), PageError> {
         let webview = self.webview()?;
         let escaped = selector.replace('\\', "\\\\").replace('\'', "\\'");
         let js = format!("document.querySelector('{escaped}') !== null");
@@ -660,7 +660,7 @@ impl PageEngine {
                 return Ok(());
             }
             if Instant::now() >= deadline {
-                return Err(ScraperError::Timeout);
+                return Err(PageError::Timeout);
             }
             wait_for_frame(
                 &self.servo,
@@ -672,7 +672,7 @@ impl PageEngine {
     }
 
     /// Wait until a JS expression evaluates to a truthy value.
-    pub fn wait_for_condition(&self, js_expr: &str, timeout_secs: u64) -> Result<(), ScraperError> {
+    pub fn wait_for_condition(&self, js_expr: &str, timeout_secs: u64) -> Result<(), PageError> {
         let webview = self.webview()?;
         let deadline = Instant::now() + Duration::from_secs(timeout_secs);
         loop {
@@ -690,7 +690,7 @@ impl PageEngine {
                 _ => {}
             }
             if Instant::now() >= deadline {
-                return Err(ScraperError::Timeout);
+                return Err(PageError::Timeout);
             }
             wait_for_frame(
                 &self.servo,
@@ -711,7 +711,7 @@ impl PageEngine {
     }
 
     /// Wait for the next navigation to complete.
-    pub fn wait_for_navigation(&self, timeout_secs: u64) -> Result<(), ScraperError> {
+    pub fn wait_for_navigation(&self, timeout_secs: u64) -> Result<(), PageError> {
         self.webview()?;
         self.delegate.load_complete.set(false);
         let delegate = self.delegate.clone();
@@ -722,7 +722,7 @@ impl PageEngine {
             timeout_secs,
         );
         if !loaded {
-            return Err(ScraperError::Timeout);
+            return Err(PageError::Timeout);
         }
         Ok(())
     }
@@ -730,7 +730,7 @@ impl PageEngine {
     // -- Phase 3: Input events --
 
     /// Click at the given device coordinates.
-    pub fn click(&self, x: f32, y: f32) -> Result<(), ScraperError> {
+    pub fn click(&self, x: f32, y: f32) -> Result<(), PageError> {
         let webview = self.webview()?;
         let point = WebViewPoint::from(DevicePoint::new(x, y));
 
@@ -755,7 +755,7 @@ impl PageEngine {
     }
 
     /// Click on an element matching a CSS selector.
-    pub fn click_selector(&self, selector: &str) -> Result<(), ScraperError> {
+    pub fn click_selector(&self, selector: &str) -> Result<(), PageError> {
         let webview = self.webview()?;
         let escaped = selector.replace('\\', "\\\\").replace('\'', "\\'");
         let js = format!(
@@ -777,25 +777,25 @@ impl PageEngine {
             JSValue::Array(coords) if coords.len() == 2 => {
                 let x = match &coords[0] {
                     JSValue::Number(n) => *n as f32,
-                    _ => return Err(ScraperError::JsError("invalid coordinate".into())),
+                    _ => return Err(PageError::JsError("invalid coordinate".into())),
                 };
                 let y = match &coords[1] {
                     JSValue::Number(n) => *n as f32,
-                    _ => return Err(ScraperError::JsError("invalid coordinate".into())),
+                    _ => return Err(PageError::JsError("invalid coordinate".into())),
                 };
                 self.click(x, y)
             }
             JSValue::Null | JSValue::Undefined => {
-                Err(ScraperError::SelectorNotFound(selector.to_string()))
+                Err(PageError::SelectorNotFound(selector.to_string()))
             }
-            other => Err(ScraperError::JsError(format!(
+            other => Err(PageError::JsError(format!(
                 "unexpected getBoundingClientRect result: {other:?}"
             ))),
         }
     }
 
     /// Type text by sending individual key events.
-    pub fn type_text(&self, text: &str) -> Result<(), ScraperError> {
+    pub fn type_text(&self, text: &str) -> Result<(), PageError> {
         let webview = self.webview()?;
         for ch in text.chars() {
             let key = Key::Character(ch.to_string());
@@ -819,7 +819,7 @@ impl PageEngine {
     }
 
     /// Press a single key by name (e.g. "Enter", "Tab", "a").
-    pub fn key_press(&self, key_name: &str) -> Result<(), ScraperError> {
+    pub fn key_press(&self, key_name: &str) -> Result<(), PageError> {
         let webview = self.webview()?;
         let key = parse_key_name(key_name);
 
@@ -842,7 +842,7 @@ impl PageEngine {
     }
 
     /// Move the mouse to the given device coordinates.
-    pub fn mouse_move(&self, x: f32, y: f32) -> Result<(), ScraperError> {
+    pub fn mouse_move(&self, x: f32, y: f32) -> Result<(), PageError> {
         let webview = self.webview()?;
         let point = WebViewPoint::from(DevicePoint::new(x, y));
         webview.notify_input_event(InputEvent::MouseMove(MouseMoveEvent::new(point)));

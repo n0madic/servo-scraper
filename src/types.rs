@@ -10,7 +10,7 @@ use serde::Serialize;
 
 /// Options for configuring a page session.
 #[derive(Debug, Clone)]
-pub struct ScraperOptions {
+pub struct PageOptions {
     /// Viewport width in pixels (default: 1280).
     pub width: u32,
     /// Viewport height in pixels (default: 720).
@@ -23,7 +23,7 @@ pub struct ScraperOptions {
     pub fullpage: bool,
 }
 
-impl Default for ScraperOptions {
+impl Default for PageOptions {
     fn default() -> Self {
         Self {
             width: 1280,
@@ -52,7 +52,7 @@ pub struct NetworkRequest {
 
 /// Errors that can occur during page operations.
 #[derive(Debug)]
-pub enum ScraperError {
+pub enum PageError {
     /// Failed to initialize the engine.
     InitFailed(String),
     /// Failed to load the page.
@@ -71,19 +71,19 @@ pub enum ScraperError {
     SelectorNotFound(String),
 }
 
-impl fmt::Display for ScraperError {
+impl fmt::Display for PageError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            ScraperError::InitFailed(msg) => write!(f, "initialization failed: {msg}"),
-            ScraperError::LoadFailed(msg) => write!(f, "page load failed: {msg}"),
-            ScraperError::Timeout => write!(f, "timed out"),
-            ScraperError::JsError(msg) => write!(f, "JavaScript error: {msg}"),
-            ScraperError::ScreenshotFailed(msg) => write!(f, "screenshot failed: {msg}"),
-            ScraperError::ChannelClosed => write!(f, "internal channel closed"),
-            ScraperError::NoPage => write!(f, "no page open"),
-            ScraperError::SelectorNotFound(sel) => write!(f, "selector not found: {sel}"),
+            PageError::InitFailed(msg) => write!(f, "initialization failed: {msg}"),
+            PageError::LoadFailed(msg) => write!(f, "page load failed: {msg}"),
+            PageError::Timeout => write!(f, "timed out"),
+            PageError::JsError(msg) => write!(f, "JavaScript error: {msg}"),
+            PageError::ScreenshotFailed(msg) => write!(f, "screenshot failed: {msg}"),
+            PageError::ChannelClosed => write!(f, "internal channel closed"),
+            PageError::NoPage => write!(f, "no page open"),
+            PageError::SelectorNotFound(sel) => write!(f, "selector not found: {sel}"),
         }
     }
 }
 
-impl std::error::Error for ScraperError {}
+impl std::error::Error for PageError {}

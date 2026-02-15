@@ -5,29 +5,29 @@
 //! Layer 3: C FFI — `extern "C"` functions wrapping [`Page`](crate::Page).
 
 use crate::page::Page;
-use crate::types::{ScraperError, ScraperOptions};
+use crate::types::{PageError, PageOptions};
 
-const SCRAPER_OK: i32 = 0;
-const SCRAPER_ERR_INIT: i32 = 1;
-const SCRAPER_ERR_LOAD: i32 = 2;
-const SCRAPER_ERR_TIMEOUT: i32 = 3;
-const SCRAPER_ERR_JS: i32 = 4;
-const SCRAPER_ERR_SCREENSHOT: i32 = 5;
-const SCRAPER_ERR_CHANNEL: i32 = 6;
-const SCRAPER_ERR_NULL_PTR: i32 = 7;
-const SCRAPER_ERR_NO_PAGE: i32 = 8;
-const SCRAPER_ERR_SELECTOR: i32 = 9;
+const PAGE_OK: i32 = 0;
+const PAGE_ERR_INIT: i32 = 1;
+const PAGE_ERR_LOAD: i32 = 2;
+const PAGE_ERR_TIMEOUT: i32 = 3;
+const PAGE_ERR_JS: i32 = 4;
+const PAGE_ERR_SCREENSHOT: i32 = 5;
+const PAGE_ERR_CHANNEL: i32 = 6;
+const PAGE_ERR_NULL_PTR: i32 = 7;
+const PAGE_ERR_NO_PAGE: i32 = 8;
+const PAGE_ERR_SELECTOR: i32 = 9;
 
-fn error_code(e: &ScraperError) -> i32 {
+fn error_code(e: &PageError) -> i32 {
     match e {
-        ScraperError::InitFailed(_) => SCRAPER_ERR_INIT,
-        ScraperError::LoadFailed(_) => SCRAPER_ERR_LOAD,
-        ScraperError::Timeout => SCRAPER_ERR_TIMEOUT,
-        ScraperError::JsError(_) => SCRAPER_ERR_JS,
-        ScraperError::ScreenshotFailed(_) => SCRAPER_ERR_SCREENSHOT,
-        ScraperError::ChannelClosed => SCRAPER_ERR_CHANNEL,
-        ScraperError::NoPage => SCRAPER_ERR_NO_PAGE,
-        ScraperError::SelectorNotFound(_) => SCRAPER_ERR_SELECTOR,
+        PageError::InitFailed(_) => PAGE_ERR_INIT,
+        PageError::LoadFailed(_) => PAGE_ERR_LOAD,
+        PageError::Timeout => PAGE_ERR_TIMEOUT,
+        PageError::JsError(_) => PAGE_ERR_JS,
+        PageError::ScreenshotFailed(_) => PAGE_ERR_SCREENSHOT,
+        PageError::ChannelClosed => PAGE_ERR_CHANNEL,
+        PageError::NoPage => PAGE_ERR_NO_PAGE,
+        PageError::SelectorNotFound(_) => PAGE_ERR_SELECTOR,
     }
 }
 
@@ -49,7 +49,7 @@ pub extern "C" fn page_new(
     wait: f64,
     fullpage: i32,
 ) -> *mut Page {
-    let options = ScraperOptions {
+    let options = PageOptions {
         width,
         height,
         timeout,
@@ -84,15 +84,15 @@ pub unsafe extern "C" fn page_free(page: *mut Page) {
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn page_open(page: *mut Page, url: *const std::ffi::c_char) -> i32 {
     if page.is_null() || url.is_null() {
-        return SCRAPER_ERR_NULL_PTR;
+        return PAGE_ERR_NULL_PTR;
     }
     let page = unsafe { &*page };
     let url_str = match unsafe { std::ffi::CStr::from_ptr(url) }.to_str() {
         Ok(s) => s,
-        Err(_) => return SCRAPER_ERR_LOAD,
+        Err(_) => return PAGE_ERR_LOAD,
     };
     match page.open(url_str) {
-        Ok(()) => SCRAPER_OK,
+        Ok(()) => PAGE_OK,
         Err(e) => error_code(&e),
     }
 }
@@ -115,12 +115,12 @@ pub unsafe extern "C" fn page_evaluate(
     out_len: *mut usize,
 ) -> i32 {
     if page.is_null() || script.is_null() || out_json.is_null() || out_len.is_null() {
-        return SCRAPER_ERR_NULL_PTR;
+        return PAGE_ERR_NULL_PTR;
     }
     let page = unsafe { &*page };
     let script_str = match unsafe { std::ffi::CStr::from_ptr(script) }.to_str() {
         Ok(s) => s,
-        Err(_) => return SCRAPER_ERR_JS,
+        Err(_) => return PAGE_ERR_JS,
     };
     match page.evaluate(script_str) {
         Ok(json) => match std::ffi::CString::new(json) {
@@ -131,9 +131,9 @@ pub unsafe extern "C" fn page_evaluate(
                     *out_json = ptr;
                     *out_len = len;
                 }
-                SCRAPER_OK
+                PAGE_OK
             }
-            Err(_) => SCRAPER_ERR_JS,
+            Err(_) => PAGE_ERR_JS,
         },
         Err(e) => error_code(&e),
     }
@@ -153,7 +153,7 @@ pub unsafe extern "C" fn page_screenshot(
     out_len: *mut usize,
 ) -> i32 {
     if page.is_null() || out_data.is_null() || out_len.is_null() {
-        return SCRAPER_ERR_NULL_PTR;
+        return PAGE_ERR_NULL_PTR;
     }
     let page = unsafe { &*page };
     match page.screenshot() {
@@ -165,7 +165,7 @@ pub unsafe extern "C" fn page_screenshot(
                 *out_data = ptr;
                 *out_len = len;
             }
-            SCRAPER_OK
+            PAGE_OK
         }
         Err(e) => error_code(&e),
     }
@@ -183,7 +183,7 @@ pub unsafe extern "C" fn page_screenshot_fullpage(
     out_len: *mut usize,
 ) -> i32 {
     if page.is_null() || out_data.is_null() || out_len.is_null() {
-        return SCRAPER_ERR_NULL_PTR;
+        return PAGE_ERR_NULL_PTR;
     }
     let page = unsafe { &*page };
     match page.screenshot_fullpage() {
@@ -195,7 +195,7 @@ pub unsafe extern "C" fn page_screenshot_fullpage(
                 *out_data = ptr;
                 *out_len = len;
             }
-            SCRAPER_OK
+            PAGE_OK
         }
         Err(e) => error_code(&e),
     }
@@ -215,7 +215,7 @@ pub unsafe extern "C" fn page_html(
     out_len: *mut usize,
 ) -> i32 {
     if page.is_null() || out_html.is_null() || out_len.is_null() {
-        return SCRAPER_ERR_NULL_PTR;
+        return PAGE_ERR_NULL_PTR;
     }
     let page = unsafe { &*page };
     match page.html() {
@@ -227,9 +227,9 @@ pub unsafe extern "C" fn page_html(
                     *out_html = ptr;
                     *out_len = len;
                 }
-                SCRAPER_OK
+                PAGE_OK
             }
-            Err(_) => SCRAPER_ERR_JS,
+            Err(_) => PAGE_ERR_JS,
         },
         Err(e) => error_code(&e),
     }
@@ -249,7 +249,7 @@ pub unsafe extern "C" fn page_url(
     out_len: *mut usize,
 ) -> i32 {
     if page.is_null() || out_url.is_null() || out_len.is_null() {
-        return SCRAPER_ERR_NULL_PTR;
+        return PAGE_ERR_NULL_PTR;
     }
     let page = unsafe { &*page };
     match page.url() {
@@ -261,11 +261,11 @@ pub unsafe extern "C" fn page_url(
                     *out_url = ptr;
                     *out_len = len;
                 }
-                SCRAPER_OK
+                PAGE_OK
             }
-            Err(_) => SCRAPER_ERR_JS,
+            Err(_) => PAGE_ERR_JS,
         },
-        None => SCRAPER_ERR_NO_PAGE,
+        None => PAGE_ERR_NO_PAGE,
     }
 }
 
@@ -281,7 +281,7 @@ pub unsafe extern "C" fn page_title(
     out_len: *mut usize,
 ) -> i32 {
     if page.is_null() || out_title.is_null() || out_len.is_null() {
-        return SCRAPER_ERR_NULL_PTR;
+        return PAGE_ERR_NULL_PTR;
     }
     let page = unsafe { &*page };
     match page.title() {
@@ -293,11 +293,11 @@ pub unsafe extern "C" fn page_title(
                     *out_title = ptr;
                     *out_len = len;
                 }
-                SCRAPER_OK
+                PAGE_OK
             }
-            Err(_) => SCRAPER_ERR_JS,
+            Err(_) => PAGE_ERR_JS,
         },
-        None => SCRAPER_ERR_NO_PAGE,
+        None => PAGE_ERR_NO_PAGE,
     }
 }
 
@@ -315,7 +315,7 @@ pub unsafe extern "C" fn page_console_messages(
     out_len: *mut usize,
 ) -> i32 {
     if page.is_null() || out_json.is_null() || out_len.is_null() {
-        return SCRAPER_ERR_NULL_PTR;
+        return PAGE_ERR_NULL_PTR;
     }
     let page = unsafe { &*page };
     let msgs = page.console_messages();
@@ -328,9 +328,9 @@ pub unsafe extern "C" fn page_console_messages(
                 *out_json = ptr;
                 *out_len = len;
             }
-            SCRAPER_OK
+            PAGE_OK
         }
-        Err(_) => SCRAPER_ERR_JS,
+        Err(_) => PAGE_ERR_JS,
     }
 }
 
@@ -346,7 +346,7 @@ pub unsafe extern "C" fn page_network_requests(
     out_len: *mut usize,
 ) -> i32 {
     if page.is_null() || out_json.is_null() || out_len.is_null() {
-        return SCRAPER_ERR_NULL_PTR;
+        return PAGE_ERR_NULL_PTR;
     }
     let page = unsafe { &*page };
     let reqs = page.network_requests();
@@ -359,9 +359,9 @@ pub unsafe extern "C" fn page_network_requests(
                 *out_json = ptr;
                 *out_len = len;
             }
-            SCRAPER_OK
+            PAGE_OK
         }
-        Err(_) => SCRAPER_ERR_JS,
+        Err(_) => PAGE_ERR_JS,
     }
 }
 
@@ -379,15 +379,15 @@ pub unsafe extern "C" fn page_wait_for_selector(
     timeout_secs: u64,
 ) -> i32 {
     if page.is_null() || selector.is_null() {
-        return SCRAPER_ERR_NULL_PTR;
+        return PAGE_ERR_NULL_PTR;
     }
     let page = unsafe { &*page };
     let sel = match unsafe { std::ffi::CStr::from_ptr(selector) }.to_str() {
         Ok(s) => s,
-        Err(_) => return SCRAPER_ERR_JS,
+        Err(_) => return PAGE_ERR_JS,
     };
     match page.wait_for_selector(sel, timeout_secs) {
-        Ok(()) => SCRAPER_OK,
+        Ok(()) => PAGE_OK,
         Err(e) => error_code(&e),
     }
 }
@@ -404,15 +404,15 @@ pub unsafe extern "C" fn page_wait_for_condition(
     timeout_secs: u64,
 ) -> i32 {
     if page.is_null() || js_expr.is_null() {
-        return SCRAPER_ERR_NULL_PTR;
+        return PAGE_ERR_NULL_PTR;
     }
     let page = unsafe { &*page };
     let expr = match unsafe { std::ffi::CStr::from_ptr(js_expr) }.to_str() {
         Ok(s) => s,
-        Err(_) => return SCRAPER_ERR_JS,
+        Err(_) => return PAGE_ERR_JS,
     };
     match page.wait_for_condition(expr, timeout_secs) {
-        Ok(()) => SCRAPER_OK,
+        Ok(()) => PAGE_OK,
         Err(e) => error_code(&e),
     }
 }
@@ -425,11 +425,11 @@ pub unsafe extern "C" fn page_wait_for_condition(
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn page_wait(page: *mut Page, seconds: f64) -> i32 {
     if page.is_null() {
-        return SCRAPER_ERR_NULL_PTR;
+        return PAGE_ERR_NULL_PTR;
     }
     let page = unsafe { &*page };
     page.wait(seconds);
-    SCRAPER_OK
+    PAGE_OK
 }
 
 /// Wait for the next navigation to complete.
@@ -440,11 +440,11 @@ pub unsafe extern "C" fn page_wait(page: *mut Page, seconds: f64) -> i32 {
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn page_wait_for_navigation(page: *mut Page, timeout_secs: u64) -> i32 {
     if page.is_null() {
-        return SCRAPER_ERR_NULL_PTR;
+        return PAGE_ERR_NULL_PTR;
     }
     let page = unsafe { &*page };
     match page.wait_for_navigation(timeout_secs) {
-        Ok(()) => SCRAPER_OK,
+        Ok(()) => PAGE_OK,
         Err(e) => error_code(&e),
     }
 }
@@ -459,11 +459,11 @@ pub unsafe extern "C" fn page_wait_for_navigation(page: *mut Page, timeout_secs:
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn page_click(page: *mut Page, x: f32, y: f32) -> i32 {
     if page.is_null() {
-        return SCRAPER_ERR_NULL_PTR;
+        return PAGE_ERR_NULL_PTR;
     }
     let page = unsafe { &*page };
     match page.click(x, y) {
-        Ok(()) => SCRAPER_OK,
+        Ok(()) => PAGE_OK,
         Err(e) => error_code(&e),
     }
 }
@@ -479,15 +479,15 @@ pub unsafe extern "C" fn page_click_selector(
     selector: *const std::ffi::c_char,
 ) -> i32 {
     if page.is_null() || selector.is_null() {
-        return SCRAPER_ERR_NULL_PTR;
+        return PAGE_ERR_NULL_PTR;
     }
     let page = unsafe { &*page };
     let sel = match unsafe { std::ffi::CStr::from_ptr(selector) }.to_str() {
         Ok(s) => s,
-        Err(_) => return SCRAPER_ERR_JS,
+        Err(_) => return PAGE_ERR_JS,
     };
     match page.click_selector(sel) {
-        Ok(()) => SCRAPER_OK,
+        Ok(()) => PAGE_OK,
         Err(e) => error_code(&e),
     }
 }
@@ -500,15 +500,15 @@ pub unsafe extern "C" fn page_click_selector(
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn page_type_text(page: *mut Page, text: *const std::ffi::c_char) -> i32 {
     if page.is_null() || text.is_null() {
-        return SCRAPER_ERR_NULL_PTR;
+        return PAGE_ERR_NULL_PTR;
     }
     let page = unsafe { &*page };
     let text_str = match unsafe { std::ffi::CStr::from_ptr(text) }.to_str() {
         Ok(s) => s,
-        Err(_) => return SCRAPER_ERR_JS,
+        Err(_) => return PAGE_ERR_JS,
     };
     match page.type_text(text_str) {
-        Ok(()) => SCRAPER_OK,
+        Ok(()) => PAGE_OK,
         Err(e) => error_code(&e),
     }
 }
@@ -521,15 +521,15 @@ pub unsafe extern "C" fn page_type_text(page: *mut Page, text: *const std::ffi::
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn page_key_press(page: *mut Page, key_name: *const std::ffi::c_char) -> i32 {
     if page.is_null() || key_name.is_null() {
-        return SCRAPER_ERR_NULL_PTR;
+        return PAGE_ERR_NULL_PTR;
     }
     let page = unsafe { &*page };
     let name = match unsafe { std::ffi::CStr::from_ptr(key_name) }.to_str() {
         Ok(s) => s,
-        Err(_) => return SCRAPER_ERR_JS,
+        Err(_) => return PAGE_ERR_JS,
     };
     match page.key_press(name) {
-        Ok(()) => SCRAPER_OK,
+        Ok(()) => PAGE_OK,
         Err(e) => error_code(&e),
     }
 }
@@ -542,11 +542,11 @@ pub unsafe extern "C" fn page_key_press(page: *mut Page, key_name: *const std::f
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn page_mouse_move(page: *mut Page, x: f32, y: f32) -> i32 {
     if page.is_null() {
-        return SCRAPER_ERR_NULL_PTR;
+        return PAGE_ERR_NULL_PTR;
     }
     let page = unsafe { &*page };
     match page.mouse_move(x, y) {
-        Ok(()) => SCRAPER_OK,
+        Ok(()) => PAGE_OK,
         Err(e) => error_code(&e),
     }
 }

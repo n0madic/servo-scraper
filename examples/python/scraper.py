@@ -27,29 +27,30 @@ from ctypes import (
 )
 
 # Error codes (must match servo_scraper.h)
-SCRAPER_OK = 0
-SCRAPER_ERR_INIT = 1
-SCRAPER_ERR_LOAD = 2
-SCRAPER_ERR_TIMEOUT = 3
-SCRAPER_ERR_JS = 4
-SCRAPER_ERR_SCREENSHOT = 5
-SCRAPER_ERR_CHANNEL = 6
-SCRAPER_ERR_NULL_PTR = 7
-SCRAPER_ERR_NO_PAGE = 8
-SCRAPER_ERR_SELECTOR = 9
+PAGE_OK = 0
+PAGE_ERR_INIT = 1
+PAGE_ERR_LOAD = 2
+PAGE_ERR_TIMEOUT = 3
+PAGE_ERR_JS = 4
+PAGE_ERR_SCREENSHOT = 5
+PAGE_ERR_CHANNEL = 6
+PAGE_ERR_NULL_PTR = 7
+PAGE_ERR_NO_PAGE = 8
+PAGE_ERR_SELECTOR = 9
 
 ERROR_NAMES = {
-    SCRAPER_OK: "OK",
-    SCRAPER_ERR_INIT: "INIT_FAILED",
-    SCRAPER_ERR_LOAD: "LOAD_FAILED",
-    SCRAPER_ERR_TIMEOUT: "TIMEOUT",
-    SCRAPER_ERR_JS: "JS_ERROR",
-    SCRAPER_ERR_SCREENSHOT: "SCREENSHOT_FAILED",
-    SCRAPER_ERR_CHANNEL: "CHANNEL_CLOSED",
-    SCRAPER_ERR_NULL_PTR: "NULL_POINTER",
-    SCRAPER_ERR_NO_PAGE: "NO_PAGE",
-    SCRAPER_ERR_SELECTOR: "SELECTOR_NOT_FOUND",
+    PAGE_OK: "OK",
+    PAGE_ERR_INIT: "INIT_FAILED",
+    PAGE_ERR_LOAD: "LOAD_FAILED",
+    PAGE_ERR_TIMEOUT: "TIMEOUT",
+    PAGE_ERR_JS: "JS_ERROR",
+    PAGE_ERR_SCREENSHOT: "SCREENSHOT_FAILED",
+    PAGE_ERR_CHANNEL: "CHANNEL_CLOSED",
+    PAGE_ERR_NULL_PTR: "NULL_POINTER",
+    PAGE_ERR_NO_PAGE: "NO_PAGE",
+    PAGE_ERR_SELECTOR: "SELECTOR_NOT_FOUND",
 }
+
 
 
 def find_library():
@@ -195,7 +196,7 @@ def main():
         # 2. Open URL
         print(f"Opening {sys.argv[1]}...", file=sys.stderr)
         rc = lib.page_open(page, url)
-        if rc != SCRAPER_OK:
+        if rc != PAGE_OK:
             print(
                 f"Error: page_open failed: {ERROR_NAMES.get(rc, 'UNKNOWN')} ({rc})",
                 file=sys.stderr,
@@ -207,7 +208,7 @@ def main():
         title_data = c_char_p()
         title_len = c_size_t(0)
         rc = lib.page_evaluate(page, b"document.title", ctypes.byref(title_data), ctypes.byref(title_len))
-        if rc == SCRAPER_OK:
+        if rc == PAGE_OK:
             title = title_data.value[:title_len.value].decode("utf-8", errors="replace")
             lib.page_string_free(title_data)
             print(f"Page title: {title}", file=sys.stderr)
@@ -217,7 +218,7 @@ def main():
         png_data = POINTER(c_uint8)()
         png_len = c_size_t(0)
         rc = lib.page_screenshot(page, ctypes.byref(png_data), ctypes.byref(png_len))
-        if rc != SCRAPER_OK:
+        if rc != PAGE_OK:
             print(
                 f"Error: screenshot failed: {ERROR_NAMES.get(rc, 'UNKNOWN')} ({rc})",
                 file=sys.stderr,
@@ -234,7 +235,7 @@ def main():
         html_data = c_char_p()
         html_len = c_size_t(0)
         rc = lib.page_html(page, ctypes.byref(html_data), ctypes.byref(html_len))
-        if rc != SCRAPER_OK:
+        if rc != PAGE_OK:
             print(
                 f"Error: HTML capture failed: {ERROR_NAMES.get(rc, 'UNKNOWN')} ({rc})",
                 file=sys.stderr,

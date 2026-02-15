@@ -20,10 +20,10 @@ python3 examples/python/scraper.py https://example.com /tmp/shot.png /tmp/page.h
 
 1. Loads `target/release/libservo_scraper.dylib` via `ctypes.CDLL`
 2. Sets up function signatures (argtypes/restype) for type safety
-3. Calls `scraper_new()` to create a thread-safe scraper handle
-4. Calls `scraper_screenshot()` / `scraper_html()` to capture data
-5. Frees buffers with `scraper_buffer_free()` / `scraper_string_free()`
-6. Destroys the scraper with `scraper_free()`
+3. Calls `page_new()` to create a thread-safe page handle
+4. Calls `page_open()` to navigate, then `page_screenshot()` / `page_html()` to capture data
+5. Frees buffers with `page_buffer_free()` / `page_string_free()`
+6. Destroys the page with `page_free()`
 
 ## API Quick Reference
 
@@ -32,26 +32,27 @@ import ctypes
 
 lib = ctypes.CDLL("target/release/libservo_scraper.dylib")
 
-# Create scraper (width, height, timeout_sec, wait_sec, fullpage)
-scraper = lib.scraper_new(1280, 720, 30, 2.0, 0)
+# Create page (width, height, timeout_sec, wait_sec, fullpage)
+page = lib.page_new(1280, 720, 30, 2.0, 0)
+
+# Open URL
+lib.page_open(page, b"https://example.com")
 
 # Screenshot → PNG bytes
 png_data = ctypes.POINTER(ctypes.c_uint8)()
 png_len = ctypes.c_size_t(0)
-rc = lib.scraper_screenshot(scraper, b"https://example.com",
-                            ctypes.byref(png_data), ctypes.byref(png_len))
-if rc == 0:  # SCRAPER_OK
+rc = lib.page_screenshot(page, ctypes.byref(png_data), ctypes.byref(png_len))
+if rc == 0:  # PAGE_OK
     data = bytes(png_data[:png_len.value])
-    lib.scraper_buffer_free(png_data, png_len)
+    lib.page_buffer_free(png_data, png_len)
 
 # HTML → string
 html_ptr = ctypes.c_char_p()
 html_len = ctypes.c_size_t(0)
-rc = lib.scraper_html(scraper, b"https://example.com",
-                      ctypes.byref(html_ptr), ctypes.byref(html_len))
+rc = lib.page_html(page, ctypes.byref(html_ptr), ctypes.byref(html_len))
 if rc == 0:
     html = html_ptr.value[:html_len.value].decode("utf-8")
-    lib.scraper_string_free(html_ptr)
+    lib.page_string_free(html_ptr)
 
-lib.scraper_free(scraper)
+lib.page_free(page)
 ```

@@ -20,16 +20,16 @@
 
 static const char *error_name(int code) {
     switch (code) {
-    case SCRAPER_OK:             return "OK";
-    case SCRAPER_ERR_INIT:       return "INIT_FAILED";
-    case SCRAPER_ERR_LOAD:       return "LOAD_FAILED";
-    case SCRAPER_ERR_TIMEOUT:    return "TIMEOUT";
-    case SCRAPER_ERR_JS:         return "JS_ERROR";
-    case SCRAPER_ERR_SCREENSHOT: return "SCREENSHOT_FAILED";
-    case SCRAPER_ERR_CHANNEL:    return "CHANNEL_CLOSED";
-    case SCRAPER_ERR_NULL_PTR:   return "NULL_POINTER";
-    case SCRAPER_ERR_NO_PAGE:    return "NO_PAGE";
-    case SCRAPER_ERR_SELECTOR:   return "SELECTOR_NOT_FOUND";
+    case PAGE_OK:             return "OK";
+    case PAGE_ERR_INIT:       return "INIT_FAILED";
+    case PAGE_ERR_LOAD:       return "LOAD_FAILED";
+    case PAGE_ERR_TIMEOUT:    return "TIMEOUT";
+    case PAGE_ERR_JS:         return "JS_ERROR";
+    case PAGE_ERR_SCREENSHOT: return "SCREENSHOT_FAILED";
+    case PAGE_ERR_CHANNEL:    return "CHANNEL_CLOSED";
+    case PAGE_ERR_NULL_PTR:   return "NULL_POINTER";
+    case PAGE_ERR_NO_PAGE:    return "NO_PAGE";
+    case PAGE_ERR_SELECTOR:   return "SELECTOR_NOT_FOUND";
     default:                     return "UNKNOWN";
     }
 }
@@ -61,7 +61,7 @@ int main(int argc, char *argv[]) {
     /* 2. Open URL */
     fprintf(stderr, "Opening %s...\n", url);
     int rc = page_open(page, url);
-    if (rc != SCRAPER_OK) {
+    if (rc != PAGE_OK) {
         fprintf(stderr, "Error: page_open failed: %s (%d)\n", error_name(rc), rc);
         page_free(page);
         return 1;
@@ -72,7 +72,7 @@ int main(int argc, char *argv[]) {
     char *title_json = NULL;
     size_t title_len = 0;
     rc = page_evaluate(page, "document.title", &title_json, &title_len);
-    if (rc == SCRAPER_OK) {
+    if (rc == PAGE_OK) {
         fprintf(stderr, "Page title: %s\n", title_json);
         page_string_free(title_json);
     }
@@ -82,7 +82,7 @@ int main(int argc, char *argv[]) {
     uint8_t *png_data = NULL;
     size_t png_len = 0;
     rc = page_screenshot(page, &png_data, &png_len);
-    if (rc != SCRAPER_OK) {
+    if (rc != PAGE_OK) {
         fprintf(stderr, "Error: screenshot failed: %s (%d)\n", error_name(rc), rc);
     } else {
         FILE *f = fopen(png_path, "wb");
@@ -101,7 +101,7 @@ int main(int argc, char *argv[]) {
     char *html_data = NULL;
     size_t html_len = 0;
     rc = page_html(page, &html_data, &html_len);
-    if (rc != SCRAPER_OK) {
+    if (rc != PAGE_OK) {
         fprintf(stderr, "Error: HTML capture failed: %s (%d)\n", error_name(rc), rc);
     } else {
         FILE *f = fopen(html_path, "w");
