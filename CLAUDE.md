@@ -41,13 +41,24 @@ There are no unit tests or integration test suites — the "tests" are FFI smoke
 
 ## Architecture
 
-The entire library is in `src/lib.rs` with three layers:
+The library is organized into four modules under `src/`:
 
-1. **PageEngine** (Layer 1) — Single-threaded, zero-overhead core. Not `Send`/`Sync`. Owns a persistent WebView for interactive use. Directly owns the Servo instance, event loop, and rendering context. The CLI (`src/main.rs`) uses this directly.
+```
+src/
+  lib.rs      Module declarations + re-exports
+  types.rs    Shared public types (ScraperOptions, ConsoleMessage, NetworkRequest, ScraperError)
+  engine.rs   PageEngine + all internal utilities (event loop, delegate, capture helpers)
+  page.rs     Page (thread-safe wrapper) + Command enum
+  ffi.rs      All extern "C" functions + error codes
+```
 
-2. **Page** (Layer 2) — Thread-safe wrapper (`Send + Sync`). Spawns a background thread running `PageEngine` and communicates via `mpsc` channels using a `Command` enum. Used by FFI consumers.
+Three architectural layers (dependency graph: `types ← engine ← page ← ffi`):
 
-3. **C FFI** (Layer 3) — `extern "C"` functions wrapping Layer 2. All functions prefixed with `page_`. Returns integer error codes (0 = OK, 1-9 = various errors).
+1. **PageEngine** (Layer 1, `engine.rs`) — Single-threaded, zero-overhead core. Not `Send`/`Sync`. Owns a persistent WebView for interactive use. Directly owns the Servo instance, event loop, and rendering context. The CLI (`src/main.rs`) uses this directly.
+
+2. **Page** (Layer 2, `page.rs`) — Thread-safe wrapper (`Send + Sync`). Spawns a background thread running `PageEngine` and communicates via `mpsc` channels using a `Command` enum. Used by FFI consumers.
+
+3. **C FFI** (Layer 3, `ffi.rs`) — `extern "C"` functions wrapping Layer 2. All functions prefixed with `page_`. Returns integer error codes (0 = OK, 1-9 = various errors).
 
 ### Public API (PageEngine / Page)
 
