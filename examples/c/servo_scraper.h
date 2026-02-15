@@ -175,6 +175,12 @@ int page_wait(ServoPage *page, double seconds);
  */
 int page_wait_for_navigation(ServoPage *page, uint64_t timeout_secs);
 
+/**
+ * Wait until no new network requests arrive for idle_ms milliseconds.
+ * Times out after timeout_secs seconds.
+ */
+int page_wait_for_network_idle(ServoPage *page, uint64_t idle_ms, uint64_t timeout_secs);
+
 /* ── Input events ──────────────────────────────────────────────────── */
 
 /**

@@ -73,6 +73,10 @@ struct CliConfig {
     #[bpaf(long("user-agent"), argument("STRING"))]
     user_agent: Option<String>,
 
+    /// Wait for network idle (no new requests for N ms) before capturing
+    #[bpaf(long("wait-for-network-idle"), argument("MS"))]
+    wait_for_network_idle: Option<u64>,
+
     /// Comma-separated URL patterns to block (e.g. ".png,.jpg,.gif")
     #[bpaf(long("block-urls"), argument("PATTERNS"))]
     block_urls: Option<String>,
@@ -148,6 +152,18 @@ fn main() {
                 process::exit(1);
             });
         eprintln!("Selector found.");
+    }
+
+    // Wait for network idle if specified.
+    if let Some(idle_ms) = config.wait_for_network_idle {
+        eprintln!("Waiting for network idle ({idle_ms}ms)...");
+        engine
+            .wait_for_network_idle(idle_ms, config.timeout)
+            .unwrap_or_else(|e| {
+                eprintln!("Error: wait for network idle failed: {e}");
+                process::exit(1);
+            });
+        eprintln!("Network idle achieved.");
     }
 
     // Evaluate JS if specified.

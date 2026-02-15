@@ -478,6 +478,27 @@ pub unsafe extern "C" fn page_wait_for_navigation(page: *mut Page, timeout_secs:
     }
 }
 
+/// Wait until no new network requests arrive for `idle_ms` milliseconds.
+///
+/// # Safety
+///
+/// `page` must be a valid pointer.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn page_wait_for_network_idle(
+    page: *mut Page,
+    idle_ms: u64,
+    timeout_secs: u64,
+) -> i32 {
+    if page.is_null() {
+        return PAGE_ERR_NULL_PTR;
+    }
+    let page = unsafe { &*page };
+    match page.wait_for_network_idle(idle_ms, timeout_secs) {
+        Ok(()) => PAGE_OK,
+        Err(e) => error_code(&e),
+    }
+}
+
 // -- Input FFI --
 
 /// Click at the given coordinates.

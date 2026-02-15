@@ -69,6 +69,11 @@ enum Command {
         timeout: u64,
         response: mpsc::Sender<Result<(), PageError>>,
     },
+    WaitForNetworkIdle {
+        idle_ms: u64,
+        timeout: u64,
+        response: mpsc::Sender<Result<(), PageError>>,
+    },
     // Phase 3: Input commands
     Click {
         x: f32,
@@ -251,6 +256,13 @@ impl Page {
                     }
                     Command::WaitForNavigation { timeout, response } => {
                         let _ = response.send(engine.wait_for_navigation(timeout));
+                    }
+                    Command::WaitForNetworkIdle {
+                        idle_ms,
+                        timeout,
+                        response,
+                    } => {
+                        let _ = response.send(engine.wait_for_network_idle(idle_ms, timeout));
                     }
                     Command::Click { x, y, response } => {
                         let _ = response.send(engine.click(x, y));
@@ -439,6 +451,14 @@ impl Page {
 
     pub fn wait_for_navigation(&self, timeout: u64) -> Result<(), PageError> {
         self.send_cmd(|response| Command::WaitForNavigation { timeout, response })?
+    }
+
+    pub fn wait_for_network_idle(&self, idle_ms: u64, timeout: u64) -> Result<(), PageError> {
+        self.send_cmd(|response| Command::WaitForNetworkIdle {
+            idle_ms,
+            timeout,
+            response,
+        })?
     }
 
     pub fn click(&self, x: f32, y: f32) -> Result<(), PageError> {

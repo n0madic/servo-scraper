@@ -851,6 +851,10 @@ fn test_close_then_operations_fail() {
         Err(PageError::NoPage)
     ));
     assert!(matches!(p.wait_for_navigation(1), Err(PageError::NoPage)));
+    assert!(matches!(
+        p.wait_for_network_idle(500, 1),
+        Err(PageError::NoPage)
+    ));
 
     // url() and title() return None (not errors)
     assert!(p.url().is_none());
@@ -938,6 +942,10 @@ fn test_all_methods_fail_before_open() {
         Err(PageError::NoPage)
     ));
     assert!(matches!(p.wait_for_navigation(1), Err(PageError::NoPage)));
+    assert!(matches!(
+        p.wait_for_network_idle(500, 1),
+        Err(PageError::NoPage)
+    ));
 
     // Optional returns should be None
     assert!(p.url().is_none());
@@ -1138,4 +1146,51 @@ fn test_set_input_files_not_file() {
         }
         other => panic!("expected JsError, got: {other:?}"),
     }
+}
+
+// ---------------------------------------------------------------------------
+// Group 20: Network Idle
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_wait_for_network_idle_after_load() {
+    reset_and_open(BASIC_HTML);
+
+    let start = Instant::now();
+    page()
+        .wait_for_network_idle(500, 5)
+        .expect("wait_for_network_idle should succeed after page load");
+    let elapsed = start.elapsed();
+    assert!(
+        elapsed.as_secs() < 3,
+        "should settle quickly after load, took {}s",
+        elapsed.as_secs()
+    );
+}
+
+#[test]
+fn test_wait_for_network_idle_no_page() {
+    reset();
+    match page().wait_for_network_idle(500, 1) {
+        Err(PageError::NoPage) => {}
+        other => panic!("expected NoPage, got: {other:?}"),
+    }
+}
+
+#[test]
+fn test_wait_for_network_idle_respects_timeout() {
+    reset_and_open(BASIC_HTML);
+
+    let start = Instant::now();
+    // With a 100ms idle window and 5s hard limit, the page has already
+    // settled so it should complete well under the hard timeout.
+    page()
+        .wait_for_network_idle(100, 5)
+        .expect("should succeed quickly");
+    let elapsed = start.elapsed();
+    assert!(
+        elapsed.as_secs() < 2,
+        "should complete well before 5s timeout, took {}s",
+        elapsed.as_secs()
+    );
 }

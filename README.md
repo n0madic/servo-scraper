@@ -10,7 +10,7 @@ Available as a **CLI tool** and a **library** with FFI bindings for C, Python, J
 - **JavaScript evaluation** — run JS and get results as JSON
 - **Screenshots** — full-page or viewport-only (PNG, JPG, BMP)
 - **HTML capture** — via JS evaluation (`document.documentElement.outerHTML`)
-- **Wait mechanisms** — wait for CSS selectors, JS conditions, navigation, or fixed time
+- **Wait mechanisms** — wait for CSS selectors, JS conditions, navigation, network idle, or fixed time
 - **Input events** — click (coordinates or CSS selector), type text, press keys, mouse move, scroll
 - **Scroll** — native wheel events or `scrollIntoView()` by CSS selector
 - **Select** — programmatic `<select>` dropdown manipulation with change event
@@ -52,7 +52,7 @@ make
 | Python smoke test | `make test-python` | verifies FFI symbols |
 | JS smoke test | `make test-js` | verifies koffi binding |
 | Go example | `make test-go` | `target/release/go_scraper` |
-| Integration tests | `cargo test` | 64 tests, ~60-90s |
+| Integration tests | `cargo test` | 67 tests, ~60-90s |
 
 ### Build Artifacts
 
@@ -87,6 +87,9 @@ servo-scraper --wait-for "h1" --screenshot page.png https://example.com
 # Custom User-Agent
 servo-scraper --user-agent "MyBot/1.0" --eval "navigator.userAgent" https://example.com
 
+# Wait for network idle (no new requests for 500ms) before capturing
+servo-scraper --wait-for-network-idle 500 --screenshot page.png https://example.com
+
 # Block images and tracking pixels
 servo-scraper --block-urls ".png,.jpg,.gif,.svg,.tracker" --screenshot page.png https://example.com
 
@@ -105,6 +108,7 @@ servo-scraper --eval "document.title" --screenshot page.png --html page.html --w
 | `--wait-for <SELECTOR>` | Wait for CSS selector before capturing | — |
 | `--fullpage` | Capture full scrollable page | off |
 | `--user-agent <STRING>` | Custom User-Agent string | Servo default |
+| `--wait-for-network-idle <MS>` | Wait for network idle (no new requests for N ms) | — |
 | `--block-urls <PATTERNS>` | Comma-separated URL patterns to block | — |
 | `--width <PX>` | Viewport width | 1280 |
 | `--height <PX>` | Viewport height | 720 |
@@ -145,6 +149,9 @@ let rect = engine.element_rect("h1").unwrap();
 let text = engine.element_text("h1").unwrap();
 let href = engine.element_attribute("a", "href").unwrap();
 let el_html = engine.element_html("h1").unwrap();
+
+// Wait for network idle (no new requests for 500ms)
+engine.wait_for_network_idle(500, 10).unwrap();
 
 // Wait for element, then click it
 engine.wait_for_selector("button#submit", 10).unwrap();
@@ -232,6 +239,7 @@ int page_wait_for_selector(page, selector, timeout_secs);
 int page_wait_for_condition(page, js_expr, timeout_secs);
 int page_wait(page, seconds);
 int page_wait_for_navigation(page, timeout_secs);
+int page_wait_for_network_idle(page, idle_ms, timeout_secs);
 
 // Input
 int page_click(page, x, y);

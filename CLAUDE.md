@@ -50,6 +50,7 @@ FFI smoke tests verify the shared library loads and exports the expected symbols
 ./target/release/servo-scraper --eval-file script.js https://example.com
 ./target/release/servo-scraper --wait-for "h1" --screenshot page.png https://example.com
 ./target/release/servo-scraper --user-agent "MyBot/1.0" --eval "navigator.userAgent" https://example.com
+./target/release/servo-scraper --wait-for-network-idle 500 --screenshot page.png https://example.com
 ./target/release/servo-scraper --block-urls ".png,.jpg,.gif,.svg" --screenshot page.png https://example.com
 ```
 
@@ -103,6 +104,7 @@ Three architectural layers (dependency graph: `types ← engine ← page ← ffi
 | `wait_for_condition(js, timeout)` | Wait for JS expression to be truthy |
 | `wait(seconds)` | Fixed wait with event loop alive |
 | `wait_for_navigation(timeout)` | Wait for next page load |
+| `wait_for_network_idle(idle_ms, timeout)` | Wait until no new network requests for `idle_ms` ms |
 | `click(x, y)` | Click at device coordinates |
 | `click_selector(css)` | Click element by CSS selector |
 | `type_text(text)` | Type text via key events |
@@ -134,6 +136,7 @@ Three architectural layers (dependency graph: `types ← engine ← page ← ffi
 - **Select** uses JS to set `<select>.value` and dispatch `input`+`change` events.
 - **File upload** uses JS DataTransfer API with base64-encoded file data to set `input.files` and dispatch `change` event. Depends on the `base64` crate.
 - **Event-driven frame waiting** — `PageDelegate` tracks a `frame_count: Cell<u64>` incremented by `notify_new_frame_ready`. Two helpers drive all waiting: `wait_for_frame(timeout)` blocks until at least one new frame is painted, and `wait_for_idle(idle_duration, max_timeout)` blocks until no new frames arrive for `idle_duration`. This replaces all arbitrary `spin_for`/`spin_briefly` delays (except the explicit `wait(seconds)` API). Input events, full-page screenshots, selector/condition polling, and post-load settling all use these frame-driven primitives.
+- **Network idle detection** — `PageDelegate` tracks `last_request_time: Cell<Option<Instant>>`, updated in `load_web_resource()` on every request start. `wait_for_network_idle(idle_ms, timeout)` polls this timestamp and returns when no new requests have started for `idle_ms` milliseconds. Since Servo's `WebViewDelegate` only fires at request **start** (no completion callback), this detects when the request cascade has settled — the same semantic used by Puppeteer/Playwright's "networkidle".
 - CLI argument parsing uses **bpaf** (derive mode).
 
 ### FFI Memory Contract

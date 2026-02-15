@@ -231,6 +231,37 @@ fn wait_for_idle(
     }
 }
 
+/// Wait until no new network requests arrive for `idle_duration`, or `max_timeout` elapses.
+/// Returns true if idle was achieved, false on timeout.
+fn wait_for_network_idle_inner(
+    servo: &Servo,
+    event_loop: &ScraperEventLoop,
+    delegate: &PageDelegate,
+    idle_duration: Duration,
+    max_timeout: Duration,
+) -> bool {
+    let max_deadline = Instant::now() + max_timeout;
+    let mut idle_deadline = Instant::now() + idle_duration;
+    let mut last_seen = delegate.last_request_time.get();
+    loop {
+        event_loop.sleep();
+        servo.spin_event_loop();
+        event_loop.clear();
+        let now = Instant::now();
+        let current = delegate.last_request_time.get();
+        if current != last_seen {
+            last_seen = current;
+            idle_deadline = now + idle_duration;
+        }
+        if now >= idle_deadline {
+            return true;
+        }
+        if now >= max_deadline {
+            return false;
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Internal: PageDelegate — enhanced WebView delegate
 // ---------------------------------------------------------------------------
@@ -239,6 +270,7 @@ fn wait_for_idle(
 struct PageDelegate {
     load_complete: Cell<bool>,
     frame_count: Cell<u64>,
+    last_request_time: Cell<Option<Instant>>,
     console_messages: RefCell<Vec<ConsoleMessage>>,
     network_requests: RefCell<Vec<NetworkRequest>>,
     blocked_url_patterns: RefCell<Vec<String>>,
@@ -279,6 +311,7 @@ impl WebViewDelegate for PageDelegate {
             url: url_str.clone(),
             is_main_frame: request.is_for_main_frame,
         });
+        self.last_request_time.set(Some(Instant::now()));
 
         // Check if URL matches any blocked pattern.
         let blocked = self
@@ -677,6 +710,7 @@ impl PageEngine {
         self.delegate.blocked_url_patterns.borrow_mut().clear();
         self.delegate.console_messages.borrow_mut().clear();
         self.delegate.network_requests.borrow_mut().clear();
+        self.delegate.last_request_time.set(None);
         self.webview = None;
     }
 
@@ -761,6 +795,26 @@ impl PageEngine {
             return Err(PageError::Timeout);
         }
         Ok(())
+    }
+
+    /// Wait until no new network requests arrive for `idle_ms` milliseconds.
+    pub fn wait_for_network_idle(&self, idle_ms: u64, timeout_secs: u64) -> Result<(), PageError> {
+        self.webview()?;
+        if self.delegate.last_request_time.get().is_none() {
+            return Ok(());
+        }
+        let settled = wait_for_network_idle_inner(
+            &self.servo,
+            &self.event_loop,
+            &self.delegate,
+            Duration::from_millis(idle_ms),
+            Duration::from_secs(timeout_secs),
+        );
+        if settled {
+            Ok(())
+        } else {
+            Err(PageError::Timeout)
+        }
     }
 
     // -- Phase 3: Input events --
