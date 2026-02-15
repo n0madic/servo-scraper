@@ -49,6 +49,7 @@ make
 | Python smoke test | `make test-python` | verifies FFI symbols |
 | JS smoke test | `make test-js` | verifies koffi binding |
 | Go example | `make test-go` | `target/release/go_scraper` |
+| Integration tests | `cargo test` | 53 tests, ~60-90s |
 
 ### Build Artifacts
 
@@ -150,6 +151,9 @@ engine.click_selector("button#submit").unwrap();
 engine.click_selector("input[name=search]").unwrap();
 engine.type_text("hello world").unwrap();
 engine.key_press("Enter").unwrap();
+
+// Reset state for reuse (drops WebView, clears all buffers)
+engine.reset();
 ```
 
 ```rust
@@ -169,6 +173,7 @@ All functions are prefixed with `page_`. See [`examples/c/servo_scraper.h`](exam
 // Lifecycle
 ServoPage *page_new(width, height, timeout, wait, fullpage, user_agent);
 void       page_free(ServoPage *page);
+int        page_reset(page);
 
 // Navigation
 int page_open(page, url);
