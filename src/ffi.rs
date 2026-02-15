@@ -1079,6 +1079,272 @@ pub unsafe extern "C" fn page_element_html(
     }
 }
 
+// -- Multi-page FFI --
+
+/// Create a new page with the default viewport size.
+/// On success, `*out_id` is set to the new page ID.
+///
+/// # Safety
+///
+/// `page` and `out_id` must be valid pointers.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn page_new_page(page: *mut Page, out_id: *mut u32) -> i32 {
+    if page.is_null() || out_id.is_null() {
+        return PAGE_ERR_NULL_PTR;
+    }
+    let page = unsafe { &*page };
+    match page.new_page() {
+        Ok(id) => {
+            unsafe { *out_id = id };
+            PAGE_OK
+        }
+        Err(e) => error_code(&e),
+    }
+}
+
+/// Create a new page with a custom viewport size.
+/// On success, `*out_id` is set to the new page ID.
+///
+/// # Safety
+///
+/// `page` and `out_id` must be valid pointers.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn page_new_page_with_size(
+    page: *mut Page,
+    width: u32,
+    height: u32,
+    out_id: *mut u32,
+) -> i32 {
+    if page.is_null() || out_id.is_null() {
+        return PAGE_ERR_NULL_PTR;
+    }
+    let page = unsafe { &*page };
+    match page.new_page_with_size(width, height) {
+        Ok(id) => {
+            unsafe { *out_id = id };
+            PAGE_OK
+        }
+        Err(e) => error_code(&e),
+    }
+}
+
+/// Switch the active page to the given ID.
+///
+/// # Safety
+///
+/// `page` must be a valid pointer.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn page_switch_to(page: *mut Page, page_id: u32) -> i32 {
+    if page.is_null() {
+        return PAGE_ERR_NULL_PTR;
+    }
+    let page = unsafe { &*page };
+    match page.switch_to(page_id) {
+        Ok(()) => PAGE_OK,
+        Err(e) => error_code(&e),
+    }
+}
+
+/// Close a specific page by ID.
+///
+/// # Safety
+///
+/// `page` must be a valid pointer.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn page_close_page(page: *mut Page, page_id: u32) -> i32 {
+    if page.is_null() {
+        return PAGE_ERR_NULL_PTR;
+    }
+    let page = unsafe { &*page };
+    match page.close_page(page_id) {
+        Ok(()) => PAGE_OK,
+        Err(e) => error_code(&e),
+    }
+}
+
+/// Get the active page ID.
+/// On success, `*out_id` is set. Returns `PAGE_ERR_NO_PAGE` if no page is active.
+///
+/// # Safety
+///
+/// `page` and `out_id` must be valid pointers.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn page_active_page_id(page: *mut Page, out_id: *mut u32) -> i32 {
+    if page.is_null() || out_id.is_null() {
+        return PAGE_ERR_NULL_PTR;
+    }
+    let page = unsafe { &*page };
+    match page.active_page_id() {
+        Some(id) => {
+            unsafe { *out_id = id };
+            PAGE_OK
+        }
+        None => PAGE_ERR_NO_PAGE,
+    }
+}
+
+/// Get all open page IDs as a JSON array string (e.g. `[0,1,2]`).
+/// Free the result with `page_string_free()`.
+///
+/// # Safety
+///
+/// All pointer arguments must be valid or NULL.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn page_page_ids(
+    page: *mut Page,
+    out_json: *mut *mut std::ffi::c_char,
+    out_len: *mut usize,
+) -> i32 {
+    if page.is_null() || out_json.is_null() || out_len.is_null() {
+        return PAGE_ERR_NULL_PTR;
+    }
+    let page = unsafe { &*page };
+    let ids = page.page_ids();
+    let json = serde_json::to_string(&ids).unwrap_or_else(|_| "[]".to_string());
+    match std::ffi::CString::new(json) {
+        Ok(cstr) => {
+            let len = cstr.as_bytes().len();
+            let ptr = cstr.into_raw();
+            unsafe {
+                *out_json = ptr;
+                *out_len = len;
+            }
+            PAGE_OK
+        }
+        Err(_) => PAGE_ERR_JS,
+    }
+}
+
+/// Get the number of open pages.
+///
+/// # Safety
+///
+/// `page` and `out_count` must be valid pointers.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn page_page_count(page: *mut Page, out_count: *mut usize) -> i32 {
+    if page.is_null() || out_count.is_null() {
+        return PAGE_ERR_NULL_PTR;
+    }
+    let page = unsafe { &*page };
+    unsafe { *out_count = page.page_count() };
+    PAGE_OK
+}
+
+/// Enable or disable popup capture. Pass non-zero to enable.
+///
+/// # Safety
+///
+/// `page` must be a valid pointer.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn page_set_popup_handling(page: *mut Page, enabled: i32) -> i32 {
+    if page.is_null() {
+        return PAGE_ERR_NULL_PTR;
+    }
+    let page = unsafe { &*page };
+    page.set_popup_handling(enabled != 0);
+    PAGE_OK
+}
+
+/// Drain pending popup pages and return their IDs as a JSON array.
+/// Free the result with `page_string_free()`.
+///
+/// # Safety
+///
+/// All pointer arguments must be valid or NULL.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn page_popup_pages(
+    page: *mut Page,
+    out_json: *mut *mut std::ffi::c_char,
+    out_len: *mut usize,
+) -> i32 {
+    if page.is_null() || out_json.is_null() || out_len.is_null() {
+        return PAGE_ERR_NULL_PTR;
+    }
+    let page = unsafe { &*page };
+    let ids = page.popup_pages();
+    let json = serde_json::to_string(&ids).unwrap_or_else(|_| "[]".to_string());
+    match std::ffi::CString::new(json) {
+        Ok(cstr) => {
+            let len = cstr.as_bytes().len();
+            let ptr = cstr.into_raw();
+            unsafe {
+                *out_json = ptr;
+                *out_len = len;
+            }
+            PAGE_OK
+        }
+        Err(_) => PAGE_ERR_JS,
+    }
+}
+
+/// Get the URL of a specific page by ID.
+/// Free the result with `page_string_free()`.
+///
+/// # Safety
+///
+/// All pointer arguments must be valid or NULL.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn page_page_url(
+    page: *mut Page,
+    page_id: u32,
+    out_url: *mut *mut std::ffi::c_char,
+    out_len: *mut usize,
+) -> i32 {
+    if page.is_null() || out_url.is_null() || out_len.is_null() {
+        return PAGE_ERR_NULL_PTR;
+    }
+    let page = unsafe { &*page };
+    match page.page_url(page_id) {
+        Some(url_str) => match std::ffi::CString::new(url_str) {
+            Ok(cstr) => {
+                let len = cstr.as_bytes().len();
+                let ptr = cstr.into_raw();
+                unsafe {
+                    *out_url = ptr;
+                    *out_len = len;
+                }
+                PAGE_OK
+            }
+            Err(_) => PAGE_ERR_JS,
+        },
+        None => PAGE_ERR_NO_PAGE,
+    }
+}
+
+/// Get the title of a specific page by ID.
+/// Free the result with `page_string_free()`.
+///
+/// # Safety
+///
+/// All pointer arguments must be valid or NULL.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn page_page_title(
+    page: *mut Page,
+    page_id: u32,
+    out_title: *mut *mut std::ffi::c_char,
+    out_len: *mut usize,
+) -> i32 {
+    if page.is_null() || out_title.is_null() || out_len.is_null() {
+        return PAGE_ERR_NULL_PTR;
+    }
+    let page = unsafe { &*page };
+    match page.page_title(page_id) {
+        Some(title_str) => match std::ffi::CString::new(title_str) {
+            Ok(cstr) => {
+                let len = cstr.as_bytes().len();
+                let ptr = cstr.into_raw();
+                unsafe {
+                    *out_title = ptr;
+                    *out_len = len;
+                }
+                PAGE_OK
+            }
+            Err(_) => PAGE_ERR_JS,
+        },
+        None => PAGE_ERR_NO_PAGE,
+    }
+}
+
 // -- Memory --
 
 /// Free a buffer returned by `page_screenshot()` or `page_screenshot_fullpage()`.

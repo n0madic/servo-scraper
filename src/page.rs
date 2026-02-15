@@ -166,6 +166,47 @@ enum Command {
         selector: String,
         response: mpsc::Sender<Result<String, PageError>>,
     },
+    // Multi-page
+    NewPage {
+        response: mpsc::Sender<Result<u32, PageError>>,
+    },
+    NewPageWithSize {
+        width: u32,
+        height: u32,
+        response: mpsc::Sender<Result<u32, PageError>>,
+    },
+    SwitchTo {
+        page_id: u32,
+        response: mpsc::Sender<Result<(), PageError>>,
+    },
+    ClosePage {
+        page_id: u32,
+        response: mpsc::Sender<Result<(), PageError>>,
+    },
+    ActivePageId {
+        response: mpsc::Sender<Option<u32>>,
+    },
+    PageIds {
+        response: mpsc::Sender<Vec<u32>>,
+    },
+    PageCount {
+        response: mpsc::Sender<usize>,
+    },
+    SetPopupHandling {
+        enabled: bool,
+        response: mpsc::Sender<()>,
+    },
+    PopupPages {
+        response: mpsc::Sender<Vec<u32>>,
+    },
+    PageUrl {
+        page_id: u32,
+        response: mpsc::Sender<Option<String>>,
+    },
+    PageTitle {
+        page_id: u32,
+        response: mpsc::Sender<Option<String>>,
+    },
     Shutdown,
 }
 
@@ -344,6 +385,45 @@ impl Page {
                     }
                     Command::ElementHtml { selector, response } => {
                         let _ = response.send(engine.element_html(&selector));
+                    }
+                    // Multi-page
+                    Command::NewPage { response } => {
+                        let _ = response.send(engine.new_page());
+                    }
+                    Command::NewPageWithSize {
+                        width,
+                        height,
+                        response,
+                    } => {
+                        let _ = response.send(engine.new_page_with_size(width, height));
+                    }
+                    Command::SwitchTo { page_id, response } => {
+                        let _ = response.send(engine.switch_to(page_id));
+                    }
+                    Command::ClosePage { page_id, response } => {
+                        let _ = response.send(engine.close_page(page_id));
+                    }
+                    Command::ActivePageId { response } => {
+                        let _ = response.send(engine.active_page_id());
+                    }
+                    Command::PageIds { response } => {
+                        let _ = response.send(engine.page_ids());
+                    }
+                    Command::PageCount { response } => {
+                        let _ = response.send(engine.page_count());
+                    }
+                    Command::SetPopupHandling { enabled, response } => {
+                        engine.set_popup_handling(enabled);
+                        let _ = response.send(());
+                    }
+                    Command::PopupPages { response } => {
+                        let _ = response.send(engine.popup_pages());
+                    }
+                    Command::PageUrl { page_id, response } => {
+                        let _ = response.send(engine.page_url(page_id));
+                    }
+                    Command::PageTitle { page_id, response } => {
+                        let _ = response.send(engine.page_title(page_id));
                     }
                     Command::Shutdown => break,
                 }
@@ -587,6 +667,76 @@ impl Page {
             selector: selector.to_string(),
             response,
         })?
+    }
+
+    // -- Multi-page methods --
+
+    /// Create a new page with the default viewport size. Returns the page ID.
+    pub fn new_page(&self) -> Result<u32, PageError> {
+        self.send_cmd(|response| Command::NewPage { response })?
+    }
+
+    /// Create a new page with a custom viewport size. Returns the page ID.
+    pub fn new_page_with_size(&self, width: u32, height: u32) -> Result<u32, PageError> {
+        self.send_cmd(|response| Command::NewPageWithSize {
+            width,
+            height,
+            response,
+        })?
+    }
+
+    /// Switch the active page to the given ID.
+    pub fn switch_to(&self, page_id: u32) -> Result<(), PageError> {
+        self.send_cmd(|response| Command::SwitchTo { page_id, response })?
+    }
+
+    /// Close a specific page by ID.
+    pub fn close_page(&self, page_id: u32) -> Result<(), PageError> {
+        self.send_cmd(|response| Command::ClosePage { page_id, response })?
+    }
+
+    /// Get the active page ID, or `None` if no page is active.
+    pub fn active_page_id(&self) -> Option<u32> {
+        self.send_cmd(|response| Command::ActivePageId { response })
+            .ok()
+            .flatten()
+    }
+
+    /// List all open page IDs (sorted).
+    pub fn page_ids(&self) -> Vec<u32> {
+        self.send_cmd(|response| Command::PageIds { response })
+            .unwrap_or_default()
+    }
+
+    /// Get the number of open pages.
+    pub fn page_count(&self) -> usize {
+        self.send_cmd(|response| Command::PageCount { response })
+            .unwrap_or(0)
+    }
+
+    /// Enable or disable popup capture.
+    pub fn set_popup_handling(&self, enabled: bool) {
+        let _ = self.send_cmd(|response| Command::SetPopupHandling { enabled, response });
+    }
+
+    /// Drain pending popup WebViews and return their page IDs.
+    pub fn popup_pages(&self) -> Vec<u32> {
+        self.send_cmd(|response| Command::PopupPages { response })
+            .unwrap_or_default()
+    }
+
+    /// Get the URL of a specific page by ID (without switching).
+    pub fn page_url(&self, page_id: u32) -> Option<String> {
+        self.send_cmd(|response| Command::PageUrl { page_id, response })
+            .ok()
+            .flatten()
+    }
+
+    /// Get the title of a specific page by ID (without switching).
+    pub fn page_title(&self, page_id: u32) -> Option<String> {
+        self.send_cmd(|response| Command::PageTitle { page_id, response })
+            .ok()
+            .flatten()
     }
 }
 

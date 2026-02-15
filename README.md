@@ -22,6 +22,8 @@ Available as a **CLI tool** and a **library** with FFI bindings for C, Python, J
 - **Custom User-Agent** — set via `PageOptions` or `--user-agent` CLI flag
 - **Console capture** — collect `console.log/warn/error` messages
 - **Network monitoring** — observe HTTP requests made during page load
+- **Multiple pages / tabs** — create, switch, close independent pages with isolated state
+- **Popup capture** — opt-in handling for `window.open()` / `target="_blank"` popups
 - **Dialog auto-dismiss** — alert/confirm/prompt dialogs are automatically handled
 - Configurable viewport size, load timeout, and post-load JS settle time
 - Software rendering — no GPU or display server required
@@ -52,7 +54,7 @@ make
 | Python smoke test | `make test-python` | verifies FFI symbols |
 | JS smoke test | `make test-js` | verifies koffi binding |
 | Go example | `make test-go` | `target/release/go_scraper` |
-| Integration tests | `cargo test` | 67 tests, ~60-90s |
+| Integration tests | `cargo test` | 87 tests, ~60-100s |
 
 ### Build Artifacts
 
@@ -179,6 +181,23 @@ engine.set_input_files("input[type=file]", &[InputFile {
 
 // Reset state for reuse (drops WebView, clears all buffers)
 engine.reset();
+
+// Multi-page: open two pages, switch between them
+let page_a = engine.new_page().unwrap();        // auto-incrementing u32 ID
+engine.switch_to(page_a).unwrap();
+engine.open("https://example.com/a").unwrap();
+
+let page_b = engine.new_page_with_size(1920, 1080).unwrap();
+engine.switch_to(page_b).unwrap();
+engine.open("https://example.com/b").unwrap();
+
+// Query any page by ID without switching
+let url_a = engine.page_url(page_a);
+let title_b = engine.page_title(page_b);
+
+// Close a specific page
+engine.close_page(page_a).unwrap();
+assert_eq!(engine.page_count(), 1);
 ```
 
 ```rust
@@ -255,6 +274,19 @@ int page_scroll_to_selector(page, selector);
 // Select / File upload
 int page_select_option(page, selector, value);
 int page_set_input_files(page, selector, paths);  // comma-separated file paths
+
+// Multi-page
+int page_new_page(page, &out_id);
+int page_new_page_with_size(page, width, height, &out_id);
+int page_switch_to(page, page_id);
+int page_close_page(page, page_id);
+int page_active_page_id(page, &out_id);
+int page_page_ids(page, &out_json, &out_len);       // "[0,1,2]"
+int page_page_count(page, &out_count);
+int page_set_popup_handling(page, enabled);
+int page_popup_pages(page, &out_json, &out_len);     // "[3,4]"
+int page_page_url(page, page_id, &out_url, &out_len);
+int page_page_title(page, page_id, &out_title, &out_len);
 
 // Memory
 void page_buffer_free(data, len);

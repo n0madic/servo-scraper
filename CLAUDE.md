@@ -69,7 +69,7 @@ src/
 
 Three architectural layers (dependency graph: `types ← engine ← page ← ffi`):
 
-1. **PageEngine** (Layer 1, `engine.rs`) — Single-threaded, zero-overhead core. Not `Send`/`Sync`. Owns a persistent WebView for interactive use. Directly owns the Servo instance, event loop, and rendering context. The CLI (`src/main.rs`) uses this directly.
+1. **PageEngine** (Layer 1, `engine.rs`) — Single-threaded, zero-overhead core. Not `Send`/`Sync`. Manages multiple pages (WebViews) with an active-page model. Directly owns the Servo instance, event loop, and per-page rendering contexts. The CLI (`src/main.rs`) uses this directly.
 
 2. **Page** (Layer 2, `page.rs`) — Thread-safe wrapper (`Send + Sync`). Spawns a background thread running `PageEngine` and communicates via `mpsc` channels using a `Command` enum. Used by FFI consumers.
 
@@ -114,11 +114,24 @@ Three architectural layers (dependency graph: `types ← engine ← page ← ffi
 | `scroll_to_selector(css)` | Scroll element into view via `scrollIntoView()` |
 | `select_option(css, value)` | Select `<select>` option by value, fires change event |
 | `set_input_files(css, files)` | Set files on `<input type="file">` via DataTransfer API |
-| `close()` | Drop the WebView |
-| `reset()` | Drop WebView + clear blocked URLs, console messages, network requests |
+| `close()` | Drop the active page's WebView |
+| `reset()` | Drop all pages + clear blocked URLs, console messages, network requests |
+| `new_page()` | Create a new page with default viewport, return its ID |
+| `new_page_with_size(w, h)` | Create a new page with custom viewport size |
+| `switch_to(page_id)` | Switch the active page |
+| `close_page(page_id)` | Close a specific page by ID |
+| `active_page_id()` | Get the active page's ID (`None` if no active page) |
+| `page_ids()` | List all open page IDs (sorted) |
+| `page_count()` | Number of open pages |
+| `set_popup_handling(enabled)` | Enable/disable popup capture (`window.open`, `target="_blank"`) |
+| `popup_pages()` | Drain pending popup pages, assign IDs, return them |
+| `page_url(page_id)` | Get URL of a specific page by ID (without switching) |
+| `page_title(page_id)` | Get title of a specific page by ID (without switching) |
 
 ### Key Implementation Details
 
+- **Multi-page architecture** — `PageEngine` maintains a `HashMap<u32, PageState>` of pages, each with its own `WebView`, `SoftwareRenderingContext`, and `PageDelegate`. This provides per-page isolation of console messages, network requests, blocked URL patterns, viewport size, and screenshots. An active-page model means all existing methods (`evaluate`, `screenshot`, `html`, etc.) target the current active page. Auto-incrementing `u32` IDs identify pages (simple for FFI). `open()` with no pages auto-creates page 0 for backward compatibility.
+- **Popup handling** — Opt-in via `set_popup_handling(true)`. When enabled, `WebViewDelegate::request_create_new` creates popup WebViews and buffers them. `popup_pages()` drains the buffer and assigns IDs. When disabled (default), popup requests are dropped (blocked).
 - **Persistent WebView** — WebView is created on first `open()` and reused for subsequent navigations via `WebView::load()`.
 - **PageDelegate** captures console messages (`show_console_message`), network requests (`load_web_resource`), blocks URLs via `blocked_url_patterns` using `WebResourceLoad::intercept().cancel()`, and auto-dismisses dialogs (`show_embedder_control`).
 - **User-Agent** is set via `ServoBuilder::preferences(Preferences { user_agent })` when `PageOptions.user_agent` is `Some`.
@@ -142,7 +155,7 @@ Three architectural layers (dependency graph: `types ← engine ← page ← ffi
 ### FFI Memory Contract
 
 - `page_screenshot` / `page_screenshot_fullpage` return a heap-allocated `Box<[u8]>` — caller frees with `page_buffer_free(data, len)`.
-- All string-returning functions (`page_html`, `page_evaluate`, `page_url`, `page_title`, `page_console_messages`, `page_network_requests`, `page_get_cookies`, `page_element_rect`, `page_element_text`, `page_element_attribute`, `page_element_html`) return a `CString` — caller frees with `page_string_free(ptr)`.
+- All string-returning functions (`page_html`, `page_evaluate`, `page_url`, `page_title`, `page_console_messages`, `page_network_requests`, `page_get_cookies`, `page_element_rect`, `page_element_text`, `page_element_attribute`, `page_element_html`, `page_page_ids`, `page_popup_pages`, `page_page_url`, `page_page_title`) return a `CString` — caller frees with `page_string_free(ptr)`.
 - `page_new` takes a 6th `user_agent` parameter (`*const c_char`, NULL = default).
 - All FFI functions are NULL-safe and return `PAGE_ERR_NULL_PTR` (7) for null arguments.
 

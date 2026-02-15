@@ -308,6 +308,73 @@ int page_element_attribute(ServoPage *page, const char *selector,
 int page_element_html(ServoPage *page, const char *selector,
                        char **out_html, size_t *out_len);
 
+/* ── Multi-page ────────────────────────────────────────────────────── */
+
+/**
+ * Create a new page with the default viewport size.
+ * On success, *out_id is set to the new page ID.
+ */
+int page_new_page(ServoPage *page, uint32_t *out_id);
+
+/**
+ * Create a new page with a custom viewport size.
+ * On success, *out_id is set to the new page ID.
+ */
+int page_new_page_with_size(ServoPage *page, uint32_t width, uint32_t height,
+                             uint32_t *out_id);
+
+/**
+ * Switch the active page to the given ID.
+ */
+int page_switch_to(ServoPage *page, uint32_t page_id);
+
+/**
+ * Close a specific page by ID.
+ */
+int page_close_page(ServoPage *page, uint32_t page_id);
+
+/**
+ * Get the active page ID.
+ * Returns PAGE_ERR_NO_PAGE if no page is active.
+ */
+int page_active_page_id(ServoPage *page, uint32_t *out_id);
+
+/**
+ * Get all open page IDs as a JSON array string (e.g. "[0,1,2]").
+ * Free the result with page_string_free().
+ */
+int page_page_ids(ServoPage *page, char **out_json, size_t *out_len);
+
+/**
+ * Get the number of open pages.
+ */
+int page_page_count(ServoPage *page, size_t *out_count);
+
+/**
+ * Enable or disable popup capture. Pass non-zero to enable.
+ */
+int page_set_popup_handling(ServoPage *page, int enabled);
+
+/**
+ * Drain pending popup pages and return their IDs as a JSON array.
+ * Free the result with page_string_free().
+ */
+int page_popup_pages(ServoPage *page, char **out_json, size_t *out_len);
+
+/**
+ * Get the URL of a specific page by ID (without switching).
+ * Free the result with page_string_free().
+ */
+int page_page_url(ServoPage *page, uint32_t page_id,
+                   char **out_url, size_t *out_len);
+
+/**
+ * Get the title of a specific page by ID (without switching).
+ * Free the result with page_string_free().
+ */
+int page_page_title(ServoPage *page, uint32_t page_id,
+                     char **out_title, size_t *out_len);
+
 /* ── Memory ────────────────────────────────────────────────────────── */
 
 /**

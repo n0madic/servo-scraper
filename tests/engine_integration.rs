@@ -1194,3 +1194,417 @@ fn test_wait_for_network_idle_respects_timeout() {
         elapsed.as_secs()
     );
 }
+
+// ---------------------------------------------------------------------------
+// Multi-page HTML constants
+// ---------------------------------------------------------------------------
+
+const MULTI_PAGE_A: &str = "\
+<html><head><title>Multi A</title></head><body>\
+<h1>Page A content</h1>\
+<script>console.log('page-a-message');</script>\
+</body></html>";
+
+const MULTI_PAGE_B: &str = "\
+<html><head><title>Multi B</title></head><body>\
+<h1>Page B content</h1>\
+<script>console.log('page-b-message');</script>\
+</body></html>";
+
+// ---------------------------------------------------------------------------
+// Group 21: Multi-Page Basics
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_new_page_returns_incrementing_ids() {
+    reset();
+    let p = page();
+
+    let id0 = p.new_page().expect("new_page failed");
+    let id1 = p.new_page().expect("new_page failed");
+    let id2 = p.new_page().expect("new_page failed");
+
+    assert_eq!(id0, 0);
+    assert_eq!(id1, 1);
+    assert_eq!(id2, 2);
+
+    // Cleanup
+    let _ = p.close_page(id0);
+    let _ = p.close_page(id1);
+    let _ = p.close_page(id2);
+}
+
+#[test]
+fn test_switch_to_page() {
+    reset();
+    let p = page();
+
+    let id_a = p.new_page().expect("new_page A failed");
+    p.switch_to(id_a).expect("switch_to A failed");
+    p.open(&data_url(MULTI_PAGE_A)).expect("open A failed");
+
+    let id_b = p.new_page().expect("new_page B failed");
+    p.switch_to(id_b).expect("switch_to B failed");
+    p.open(&data_url(MULTI_PAGE_B)).expect("open B failed");
+
+    // Verify page B is active
+    assert_eq!(p.title().unwrap(), "Multi B");
+
+    // Switch back to A
+    p.switch_to(id_a).expect("switch_to A failed");
+    assert_eq!(p.title().unwrap(), "Multi A");
+
+    // Switch to B again
+    p.switch_to(id_b).expect("switch_to B failed");
+    assert_eq!(p.title().unwrap(), "Multi B");
+}
+
+#[test]
+fn test_switch_to_invalid_id() {
+    reset();
+    let p = page();
+
+    match p.switch_to(999) {
+        Err(PageError::NoPage) => {}
+        other => panic!("expected NoPage, got: {other:?}"),
+    }
+}
+
+#[test]
+fn test_page_ids() {
+    reset();
+    let p = page();
+
+    let id0 = p.new_page().unwrap();
+    let id1 = p.new_page().unwrap();
+    let id2 = p.new_page().unwrap();
+
+    let ids = p.page_ids();
+    assert_eq!(ids, vec![id0, id1, id2]);
+
+    let _ = p.close_page(id1);
+    let ids = p.page_ids();
+    assert_eq!(ids, vec![id0, id2]);
+}
+
+#[test]
+fn test_page_count() {
+    reset();
+    let p = page();
+
+    assert_eq!(p.page_count(), 0);
+
+    let id0 = p.new_page().unwrap();
+    assert_eq!(p.page_count(), 1);
+
+    let id1 = p.new_page().unwrap();
+    assert_eq!(p.page_count(), 2);
+
+    let _ = p.close_page(id0);
+    assert_eq!(p.page_count(), 1);
+
+    let _ = p.close_page(id1);
+    assert_eq!(p.page_count(), 0);
+}
+
+#[test]
+fn test_close_page_by_id() {
+    reset();
+    let p = page();
+
+    let id_a = p.new_page().unwrap();
+    p.switch_to(id_a).unwrap();
+    p.open(&data_url(MULTI_PAGE_A)).unwrap();
+
+    let id_b = p.new_page().unwrap();
+    p.switch_to(id_b).unwrap();
+    p.open(&data_url(MULTI_PAGE_B)).unwrap();
+
+    // Close page A (non-active)
+    p.close_page(id_a).expect("close_page A failed");
+    assert_eq!(p.page_count(), 1);
+
+    // Active page (B) should still work
+    assert_eq!(p.title().unwrap(), "Multi B");
+}
+
+#[test]
+fn test_close_active_page_sets_none() {
+    reset();
+    let p = page();
+
+    let id = p.new_page().unwrap();
+    p.switch_to(id).unwrap();
+    p.open(&data_url(MULTI_PAGE_A)).unwrap();
+
+    p.close_page(id).expect("close_page failed");
+
+    // Active page is now None — methods should fail
+    assert!(p.active_page_id().is_none());
+    assert!(matches!(p.html(), Err(PageError::NoPage)));
+    assert!(p.url().is_none());
+    assert!(p.title().is_none());
+}
+
+#[test]
+fn test_close_nonexistent_page() {
+    reset();
+    let p = page();
+
+    match p.close_page(999) {
+        Err(PageError::NoPage) => {}
+        other => panic!("expected NoPage, got: {other:?}"),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Group 22: Per-Page Isolation
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_per_page_console_isolation() {
+    reset();
+    let p = page();
+
+    let id_a = p.new_page().unwrap();
+    p.switch_to(id_a).unwrap();
+    p.open(&data_url(MULTI_PAGE_A)).unwrap();
+
+    let id_b = p.new_page().unwrap();
+    p.switch_to(id_b).unwrap();
+    p.open(&data_url(MULTI_PAGE_B)).unwrap();
+
+    // Drain page B messages
+    let msgs_b = p.console_messages();
+    let b_texts: Vec<&str> = msgs_b.iter().map(|m| m.message.as_str()).collect();
+    assert!(
+        b_texts.iter().any(|t| t.contains("page-b-message")),
+        "page B should have its own console messages: {b_texts:?}"
+    );
+    assert!(
+        !b_texts.iter().any(|t| t.contains("page-a-message")),
+        "page B should NOT have page A's messages: {b_texts:?}"
+    );
+
+    // Switch to A, drain its messages
+    p.switch_to(id_a).unwrap();
+    let msgs_a = p.console_messages();
+    let a_texts: Vec<&str> = msgs_a.iter().map(|m| m.message.as_str()).collect();
+    assert!(
+        a_texts.iter().any(|t| t.contains("page-a-message")),
+        "page A should have its own console messages: {a_texts:?}"
+    );
+    assert!(
+        !a_texts.iter().any(|t| t.contains("page-b-message")),
+        "page A should NOT have page B's messages: {a_texts:?}"
+    );
+}
+
+#[test]
+fn test_per_page_screenshots() {
+    reset();
+    let p = page();
+
+    let id_a = p.new_page().unwrap();
+    p.switch_to(id_a).unwrap();
+    p.open(&data_url(MULTI_PAGE_A)).unwrap();
+
+    let id_b = p.new_page().unwrap();
+    p.switch_to(id_b).unwrap();
+    p.open(&data_url(MULTI_PAGE_B)).unwrap();
+
+    // Screenshot page B
+    let png_b = p.screenshot().unwrap();
+    assert_eq!(&png_b[..4], &PNG_MAGIC, "page B screenshot should be PNG");
+
+    // Switch to A, screenshot
+    p.switch_to(id_a).unwrap();
+    let png_a = p.screenshot().unwrap();
+    assert_eq!(&png_a[..4], &PNG_MAGIC, "page A screenshot should be PNG");
+
+    // Two different pages should produce different screenshots
+    // (they have different content, so PNG bytes should differ)
+    assert_ne!(png_a, png_b, "screenshots of different pages should differ");
+}
+
+#[test]
+fn test_per_page_network_isolation() {
+    reset();
+    let p = page();
+
+    let id_a = p.new_page().unwrap();
+    p.switch_to(id_a).unwrap();
+    p.open(&data_url(MULTI_PAGE_A)).unwrap();
+
+    let id_b = p.new_page().unwrap();
+    p.switch_to(id_b).unwrap();
+    p.open(&data_url(MULTI_PAGE_B)).unwrap();
+
+    // Network requests are per-delegate, so each page has its own.
+    let reqs_b = p.network_requests();
+    assert!(!reqs_b.is_empty(), "page B should have network requests");
+
+    p.switch_to(id_a).unwrap();
+    let reqs_a = p.network_requests();
+    assert!(!reqs_a.is_empty(), "page A should have network requests");
+}
+
+// ---------------------------------------------------------------------------
+// Group 23: Page URL/Title by ID
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_page_url_by_id() {
+    reset();
+    let p = page();
+
+    let id_a = p.new_page().unwrap();
+    p.switch_to(id_a).unwrap();
+    p.open(&data_url(MULTI_PAGE_A)).unwrap();
+
+    let id_b = p.new_page().unwrap();
+    p.switch_to(id_b).unwrap();
+    p.open(&data_url(MULTI_PAGE_B)).unwrap();
+
+    // Query page A's URL while B is active
+    let url_a = p.page_url(id_a).expect("page_url(A) should be Some");
+    assert!(url_a.starts_with("data:text/html,"), "page A URL: {url_a}");
+
+    // Query page B's URL
+    let url_b = p.page_url(id_b).expect("page_url(B) should be Some");
+    assert!(url_b.starts_with("data:text/html,"), "page B URL: {url_b}");
+}
+
+#[test]
+fn test_page_title_by_id() {
+    reset();
+    let p = page();
+
+    let id_a = p.new_page().unwrap();
+    p.switch_to(id_a).unwrap();
+    p.open(&data_url(MULTI_PAGE_A)).unwrap();
+
+    let id_b = p.new_page().unwrap();
+    p.switch_to(id_b).unwrap();
+    p.open(&data_url(MULTI_PAGE_B)).unwrap();
+
+    // Query page A's title while B is active
+    let title_a = p.page_title(id_a).expect("page_title(A) should be Some");
+    assert_eq!(title_a, "Multi A");
+
+    // Query page B's title
+    let title_b = p.page_title(id_b).expect("page_title(B) should be Some");
+    assert_eq!(title_b, "Multi B");
+}
+
+// ---------------------------------------------------------------------------
+// Group 24: Reset / Backward Compat
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_reset_closes_all_pages() {
+    let p = page();
+
+    // Create some pages
+    p.reset();
+    let _ = p.new_page().unwrap();
+    let _ = p.new_page().unwrap();
+    assert_eq!(p.page_count(), 2);
+
+    p.reset();
+    assert_eq!(p.page_count(), 0);
+    assert!(p.active_page_id().is_none());
+    assert!(p.page_ids().is_empty());
+}
+
+#[test]
+fn test_backward_compat_open_creates_page_0() {
+    reset();
+    let p = page();
+
+    // open() with no pages should auto-create page 0
+    assert_eq!(p.page_count(), 0);
+    p.open(&data_url(MULTI_PAGE_A)).unwrap();
+
+    assert_eq!(p.page_count(), 1);
+    assert_eq!(p.active_page_id(), Some(0));
+    assert_eq!(p.title().unwrap(), "Multi A");
+}
+
+#[test]
+fn test_backward_compat_close_then_reopen() {
+    reset();
+    let p = page();
+
+    p.open(&data_url(MULTI_PAGE_A)).unwrap();
+    assert_eq!(p.title().unwrap(), "Multi A");
+
+    p.close();
+    assert!(p.url().is_none());
+
+    // Open again — should auto-create a new page
+    p.open(&data_url(MULTI_PAGE_B)).unwrap();
+    assert_eq!(p.title().unwrap(), "Multi B");
+}
+
+// ---------------------------------------------------------------------------
+// Group 25: Popup
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_popup_pages_empty_initially() {
+    reset();
+    let p = page();
+
+    let popups = p.popup_pages();
+    assert!(popups.is_empty(), "no popups should exist initially");
+}
+
+#[test]
+fn test_popup_handling_disabled_by_default() {
+    reset();
+    let p = page();
+
+    // Popup handling is disabled by default, so triggering window.open
+    // should not create any popup pages.
+    p.open(&data_url(MULTI_PAGE_A)).unwrap();
+
+    // Even after loading a page, there should be no popups.
+    let popups = p.popup_pages();
+    assert!(popups.is_empty(), "popups should be blocked by default");
+}
+
+// ---------------------------------------------------------------------------
+// Group 26: Active Page ID
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_active_page_id() {
+    reset();
+    let p = page();
+
+    assert!(p.active_page_id().is_none());
+
+    let id = p.new_page().unwrap();
+    // New page created but not switched to
+    assert!(p.active_page_id().is_none());
+
+    p.switch_to(id).unwrap();
+    assert_eq!(p.active_page_id(), Some(id));
+}
+
+#[test]
+fn test_new_page_with_size() {
+    reset();
+    let p = page();
+
+    let id = p.new_page_with_size(1920, 1080).unwrap();
+    p.switch_to(id).unwrap();
+    p.open(&data_url(MULTI_PAGE_A)).unwrap();
+
+    // Verify the page works
+    assert_eq!(p.title().unwrap(), "Multi A");
+
+    // Cleanup
+    let _ = p.close_page(id);
+}

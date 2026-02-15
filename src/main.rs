@@ -122,7 +122,14 @@ fn main() {
         process::exit(1);
     });
 
+    // If block-urls requested, create the page explicitly so patterns are
+    // in place *before* the first navigation.
     if let Some(ref patterns_str) = config.block_urls {
+        let id = engine.new_page().unwrap_or_else(|e| {
+            eprintln!("Error: failed to create page: {e}");
+            process::exit(1);
+        });
+        engine.switch_to(id).unwrap();
         let patterns: Vec<String> = patterns_str
             .split(',')
             .map(|s| s.trim().to_string())

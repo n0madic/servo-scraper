@@ -5,6 +5,7 @@
 //! Layer 1: `PageEngine` — single-threaded, zero-overhead core.
 
 use std::cell::{Cell, RefCell};
+use std::collections::HashMap;
 use std::os::fd::{AsRawFd, IntoRawFd};
 use std::path::PathBuf;
 use std::rc::Rc;
@@ -16,11 +17,11 @@ use image::codecs::png::PngEncoder;
 use image::{DynamicImage, ImageEncoder};
 use servo::resources::{self, Resource, ResourceReaderMethods};
 use servo::{
-    ConsoleLogLevel, DevicePoint, EmbedderControl, EventLoopWaker, InputEvent, JSValue, Key,
-    KeyState, KeyboardEvent, LoadStatus, MouseButton, MouseButtonAction, MouseButtonEvent,
-    MouseMoveEvent, NamedKey, Preferences, RenderingContext, Servo, ServoBuilder, SimpleDialog,
-    SoftwareRenderingContext, WebResourceLoad, WebResourceResponse, WebView, WebViewBuilder,
-    WebViewDelegate, WebViewPoint, WheelDelta, WheelEvent, WheelMode,
+    ConsoleLogLevel, CreateNewWebViewRequest, DevicePoint, EmbedderControl, EventLoopWaker,
+    InputEvent, JSValue, Key, KeyState, KeyboardEvent, LoadStatus, MouseButton, MouseButtonAction,
+    MouseButtonEvent, MouseMoveEvent, NamedKey, Preferences, RenderingContext, Servo, ServoBuilder,
+    SimpleDialog, SoftwareRenderingContext, WebResourceLoad, WebResourceResponse, WebView,
+    WebViewBuilder, WebViewDelegate, WebViewPoint, WheelDelta, WheelEvent, WheelMode,
 };
 use url::Url;
 
@@ -266,7 +267,13 @@ fn wait_for_network_idle_inner(
 // Internal: PageDelegate — enhanced WebView delegate
 // ---------------------------------------------------------------------------
 
-#[derive(Default)]
+/// A popup WebView buffered until the engine drains it via `popup_pages()`.
+struct PendingPopup {
+    webview: WebView,
+    rendering_context: Rc<SoftwareRenderingContext>,
+    delegate: Rc<PageDelegate>,
+}
+
 struct PageDelegate {
     load_complete: Cell<bool>,
     frame_count: Cell<u64>,
@@ -274,6 +281,34 @@ struct PageDelegate {
     console_messages: RefCell<Vec<ConsoleMessage>>,
     network_requests: RefCell<Vec<NetworkRequest>>,
     blocked_url_patterns: RefCell<Vec<String>>,
+    closed: Cell<bool>,
+    popup_buffer: Rc<RefCell<Vec<PendingPopup>>>,
+    popup_enabled: Rc<Cell<bool>>,
+    default_width: Cell<u32>,
+    default_height: Cell<u32>,
+}
+
+impl PageDelegate {
+    fn new(
+        popup_buffer: Rc<RefCell<Vec<PendingPopup>>>,
+        popup_enabled: Rc<Cell<bool>>,
+        width: u32,
+        height: u32,
+    ) -> Self {
+        Self {
+            load_complete: Cell::new(false),
+            frame_count: Cell::new(0),
+            last_request_time: Cell::new(None),
+            console_messages: RefCell::new(Vec::new()),
+            network_requests: RefCell::new(Vec::new()),
+            blocked_url_patterns: RefCell::new(Vec::new()),
+            closed: Cell::new(false),
+            popup_buffer,
+            popup_enabled,
+            default_width: Cell::new(width),
+            default_height: Cell::new(height),
+        }
+    }
 }
 
 impl WebViewDelegate for PageDelegate {
@@ -342,6 +377,46 @@ impl WebViewDelegate for PageDelegate {
                 }
             }
         }
+    }
+
+    fn notify_closed(&self, _webview: WebView) {
+        self.closed.set(true);
+    }
+
+    fn request_create_new(&self, _parent: WebView, request: CreateNewWebViewRequest) {
+        if !self.popup_enabled.get() {
+            // Drop request to block popup.
+            return;
+        }
+
+        let w = self.default_width.get();
+        let h = self.default_height.get();
+
+        let rendering_context = match SoftwareRenderingContext::new(PhysicalSize::new(w, h)) {
+            Ok(ctx) => Rc::new(ctx),
+            Err(_) => return, // Failed — drop request to block popup.
+        };
+        if rendering_context.make_current().is_err() {
+            return;
+        }
+
+        let delegate = Rc::new(PageDelegate::new(
+            self.popup_buffer.clone(),
+            self.popup_enabled.clone(),
+            w,
+            h,
+        ));
+
+        let webview = request
+            .builder(rendering_context.clone())
+            .delegate(delegate.clone())
+            .build();
+
+        self.popup_buffer.borrow_mut().push(PendingPopup {
+            webview,
+            rendering_context,
+            delegate,
+        });
     }
 }
 
@@ -494,6 +569,19 @@ fn parse_key_name(name: &str) -> Key {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Internal: Per-page state
+// ---------------------------------------------------------------------------
+
+/// Internal state for a single page/tab.
+struct PageState {
+    webview: Option<WebView>,
+    rendering_context: Rc<SoftwareRenderingContext>,
+    delegate: Rc<PageDelegate>,
+    width: u32,
+    height: u32,
+}
+
 // ===========================================================================
 // Layer 1: PageEngine (single-threaded, zero overhead)
 // ===========================================================================
@@ -505,9 +593,11 @@ fn parse_key_name(name: &str) -> Key {
 pub struct PageEngine {
     servo: Servo,
     event_loop: ScraperEventLoop,
-    rendering_context: Rc<SoftwareRenderingContext>,
-    webview: Option<WebView>,
-    delegate: Rc<PageDelegate>,
+    pages: HashMap<u32, PageState>,
+    active_page_id: Option<u32>,
+    next_page_id: u32,
+    popup_buffer: Rc<RefCell<Vec<PendingPopup>>>,
+    popup_enabled: Rc<Cell<bool>>,
     options: PageOptions,
 }
 
@@ -523,19 +613,12 @@ impl PageEngine {
         let event_loop = ScraperEventLoop::default();
         let waker = event_loop.create_waker();
 
-        let rendering_context = Rc::new(
-            SoftwareRenderingContext::new(PhysicalSize::new(options.width, options.height))
-                .map_err(|e| PageError::InitFailed(format!("rendering context: {e:?}")))?,
-        );
-        rendering_context
-            .make_current()
-            .map_err(|e| PageError::InitFailed(format!("make_current: {e:?}")))?;
-
         let mut builder = ServoBuilder::default().event_loop_waker(waker);
         if let Some(ref ua) = options.user_agent {
-            let mut prefs = Preferences::default();
-            prefs.user_agent = ua.clone();
-            builder = builder.preferences(prefs);
+            builder = builder.preferences(Preferences {
+                user_agent: ua.clone(),
+                ..Default::default()
+            });
         }
         let servo = builder.build();
         servo.setup_logging();
@@ -543,25 +626,78 @@ impl PageEngine {
         Ok(Self {
             servo,
             event_loop,
-            rendering_context,
-            webview: None,
-            delegate: Rc::new(PageDelegate::default()),
+            pages: HashMap::new(),
+            active_page_id: None,
+            next_page_id: 0,
+            popup_buffer: Rc::new(RefCell::new(Vec::new())),
+            popup_enabled: Rc::new(Cell::new(false)),
             options,
         })
     }
 
+    // -- Active-page helpers --
+
+    fn active_page(&self) -> Result<&PageState, PageError> {
+        let id = self.active_page_id.ok_or(PageError::NoPage)?;
+        self.pages.get(&id).ok_or(PageError::NoPage)
+    }
+
     fn webview(&self) -> Result<&WebView, PageError> {
-        self.webview.as_ref().ok_or(PageError::NoPage)
+        self.active_page()?
+            .webview
+            .as_ref()
+            .ok_or(PageError::NoPage)
+    }
+
+    fn active_delegate(&self) -> Result<&PageDelegate, PageError> {
+        Ok(&self.active_page()?.delegate)
+    }
+
+    // -- Internal page creation --
+
+    fn create_page_internal(&mut self, width: u32, height: u32) -> Result<u32, PageError> {
+        let rendering_context = Rc::new(
+            SoftwareRenderingContext::new(PhysicalSize::new(width, height))
+                .map_err(|e| PageError::InitFailed(format!("rendering context: {e:?}")))?,
+        );
+        rendering_context
+            .make_current()
+            .map_err(|e| PageError::InitFailed(format!("make_current: {e:?}")))?;
+
+        let delegate = Rc::new(PageDelegate::new(
+            self.popup_buffer.clone(),
+            self.popup_enabled.clone(),
+            width,
+            height,
+        ));
+
+        let id = self.next_page_id;
+        self.next_page_id += 1;
+
+        self.pages.insert(
+            id,
+            PageState {
+                webview: None,
+                rendering_context,
+                delegate,
+                width,
+                height,
+            },
+        );
+
+        Ok(id)
     }
 
     /// Wait for the current load to complete (spin until `load_complete` + idle wait).
     fn wait_for_load(&self) -> Result<(), PageError> {
-        let delegate = self.delegate.clone();
+        let page = self.active_page()?;
+        let delegate_rc = page.delegate.clone();
+        let delegate_rc2 = delegate_rc.clone();
         let loaded = with_stderr_suppressed(|| {
             let loaded = spin_until(
                 &self.servo,
                 &self.event_loop,
-                move || delegate.load_complete.get(),
+                move || delegate_rc2.load_complete.get(),
                 self.options.timeout,
             );
 
@@ -569,7 +705,7 @@ impl PageEngine {
                 wait_for_idle(
                     &self.servo,
                     &self.event_loop,
-                    &self.delegate,
+                    &delegate_rc,
                     Duration::from_secs_f64(self.options.wait),
                     Duration::from_secs(self.options.timeout),
                 );
@@ -586,20 +722,32 @@ impl PageEngine {
     }
 
     /// Open a URL. Creates a new WebView or navigates the existing one.
+    /// If no pages exist, auto-creates page 0 and makes it active (backward compat).
     pub fn open(&mut self, url: &str) -> Result<(), PageError> {
         let parsed_url =
             Url::parse(url).map_err(|e| PageError::LoadFailed(format!("invalid URL: {e}")))?;
 
-        self.delegate.load_complete.set(false);
+        // Auto-create page 0 if no pages exist (backward compatibility).
+        if self.pages.is_empty() {
+            let id = self.create_page_internal(self.options.width, self.options.height)?;
+            self.active_page_id = Some(id);
+        }
 
-        if let Some(ref webview) = self.webview {
+        let page = self
+            .pages
+            .get_mut(&self.active_page_id.ok_or(PageError::NoPage)?)
+            .ok_or(PageError::NoPage)?;
+
+        page.delegate.load_complete.set(false);
+
+        if let Some(ref webview) = page.webview {
             webview.load(parsed_url);
         } else {
-            let webview = WebViewBuilder::new(&self.servo, self.rendering_context.clone())
-                .delegate(self.delegate.clone())
+            let webview = WebViewBuilder::new(&self.servo, page.rendering_context.clone())
+                .delegate(page.delegate.clone())
                 .url(parsed_url)
                 .build();
-            self.webview = Some(webview);
+            page.webview = Some(webview);
         }
 
         self.wait_for_load()
@@ -627,6 +775,7 @@ impl PageEngine {
     /// Take a full-page screenshot (PNG bytes).
     pub fn screenshot_fullpage(&self) -> Result<Vec<u8>, PageError> {
         let webview = self.webview()?;
+        let page = self.active_page()?;
         let js = "Math.max(document.documentElement.scrollHeight, document.body.scrollHeight)";
         if let Ok(JSValue::Number(doc_height)) = eval_js(
             &self.servo,
@@ -636,13 +785,13 @@ impl PageEngine {
             self.options.timeout,
         ) {
             let doc_height = doc_height as u32;
-            if doc_height > self.options.height {
-                let new_size = PhysicalSize::new(self.options.width, doc_height);
+            if doc_height > page.height {
+                let new_size = PhysicalSize::new(page.width, doc_height);
                 webview.resize(new_size);
                 let got_frame = wait_for_frame(
                     &self.servo,
                     &self.event_loop,
-                    &self.delegate,
+                    &page.delegate,
                     Duration::from_secs(self.options.timeout),
                 );
                 if !got_frame {
@@ -654,7 +803,7 @@ impl PageEngine {
                 wait_for_idle(
                     &self.servo,
                     &self.event_loop,
-                    &self.delegate,
+                    &page.delegate,
                     Duration::from_millis(500),
                     Duration::from_secs(5),
                 );
@@ -671,47 +820,45 @@ impl PageEngine {
 
     /// Get the current page URL.
     pub fn url(&self) -> Option<String> {
-        self.webview
-            .as_ref()
+        self.webview()
+            .ok()
             .and_then(|wv| wv.url().map(|u| u.to_string()))
     }
 
     /// Get the current page title.
     pub fn title(&self) -> Option<String> {
-        self.webview.as_ref().and_then(|wv| wv.page_title())
+        self.webview().ok().and_then(|wv| wv.page_title())
     }
 
     /// Drain and return captured console messages.
     pub fn console_messages(&self) -> Vec<ConsoleMessage> {
-        self.delegate
-            .console_messages
-            .borrow_mut()
-            .drain(..)
-            .collect()
+        match self.active_delegate() {
+            Ok(delegate) => delegate.console_messages.borrow_mut().drain(..).collect(),
+            Err(_) => Vec::new(),
+        }
     }
 
     /// Drain and return captured network requests.
     pub fn network_requests(&self) -> Vec<NetworkRequest> {
-        self.delegate
-            .network_requests
-            .borrow_mut()
-            .drain(..)
-            .collect()
+        match self.active_delegate() {
+            Ok(delegate) => delegate.network_requests.borrow_mut().drain(..).collect(),
+            Err(_) => Vec::new(),
+        }
     }
 
-    /// Close the current page (drop the WebView).
+    /// Close the active page (drop the WebView, remove from map).
     pub fn close(&mut self) {
-        self.webview = None;
+        if let Some(id) = self.active_page_id.take() {
+            self.pages.remove(&id);
+        }
     }
 
-    /// Reset all state: drop the WebView, clear blocked URL patterns,
-    /// and drain buffered console messages and network requests.
+    /// Reset all state: drop all pages, clear popup buffer, reset ID counter.
     pub fn reset(&mut self) {
-        self.delegate.blocked_url_patterns.borrow_mut().clear();
-        self.delegate.console_messages.borrow_mut().clear();
-        self.delegate.network_requests.borrow_mut().clear();
-        self.delegate.last_request_time.set(None);
-        self.webview = None;
+        self.pages.clear();
+        self.active_page_id = None;
+        self.next_page_id = 0;
+        self.popup_buffer.borrow_mut().clear();
     }
 
     // -- Phase 2: Wait mechanisms --
@@ -719,6 +866,7 @@ impl PageEngine {
     /// Wait until a CSS selector matches an element on the page.
     pub fn wait_for_selector(&self, selector: &str, timeout_secs: u64) -> Result<(), PageError> {
         let webview = self.webview()?;
+        let delegate = self.active_delegate()?;
         let escaped = selector.replace('\\', "\\\\").replace('\'', "\\'");
         let js = format!("document.querySelector('{escaped}') !== null");
 
@@ -735,7 +883,7 @@ impl PageEngine {
             wait_for_frame(
                 &self.servo,
                 &self.event_loop,
-                &self.delegate,
+                delegate,
                 Duration::from_secs(1),
             );
         }
@@ -744,6 +892,7 @@ impl PageEngine {
     /// Wait until a JS expression evaluates to a truthy value.
     pub fn wait_for_condition(&self, js_expr: &str, timeout_secs: u64) -> Result<(), PageError> {
         let webview = self.webview()?;
+        let delegate = self.active_delegate()?;
         let deadline = Instant::now() + Duration::from_secs(timeout_secs);
         loop {
             match eval_js(
@@ -765,7 +914,7 @@ impl PageEngine {
             wait_for_frame(
                 &self.servo,
                 &self.event_loop,
-                &self.delegate,
+                delegate,
                 Duration::from_secs(1),
             );
         }
@@ -783,12 +932,13 @@ impl PageEngine {
     /// Wait for the next navigation to complete.
     pub fn wait_for_navigation(&self, timeout_secs: u64) -> Result<(), PageError> {
         self.webview()?;
-        self.delegate.load_complete.set(false);
-        let delegate = self.delegate.clone();
+        let delegate = self.active_delegate()?;
+        delegate.load_complete.set(false);
+        let delegate_rc = self.active_page()?.delegate.clone();
         let loaded = spin_until(
             &self.servo,
             &self.event_loop,
-            move || delegate.load_complete.get(),
+            move || delegate_rc.load_complete.get(),
             timeout_secs,
         );
         if !loaded {
@@ -800,13 +950,14 @@ impl PageEngine {
     /// Wait until no new network requests arrive for `idle_ms` milliseconds.
     pub fn wait_for_network_idle(&self, idle_ms: u64, timeout_secs: u64) -> Result<(), PageError> {
         self.webview()?;
-        if self.delegate.last_request_time.get().is_none() {
+        let delegate = self.active_delegate()?;
+        if delegate.last_request_time.get().is_none() {
             return Ok(());
         }
         let settled = wait_for_network_idle_inner(
             &self.servo,
             &self.event_loop,
-            &self.delegate,
+            delegate,
             Duration::from_millis(idle_ms),
             Duration::from_secs(timeout_secs),
         );
@@ -822,6 +973,7 @@ impl PageEngine {
     /// Click at the given device coordinates.
     pub fn click(&self, x: f32, y: f32) -> Result<(), PageError> {
         let webview = self.webview()?;
+        let delegate = self.active_delegate()?;
         let point = WebViewPoint::from(DevicePoint::new(x, y));
 
         webview.notify_input_event(InputEvent::MouseButton(MouseButtonEvent::new(
@@ -837,7 +989,7 @@ impl PageEngine {
         wait_for_frame(
             &self.servo,
             &self.event_loop,
-            &self.delegate,
+            delegate,
             Duration::from_secs(2),
         );
 
@@ -887,6 +1039,7 @@ impl PageEngine {
     /// Type text by sending individual key events.
     pub fn type_text(&self, text: &str) -> Result<(), PageError> {
         let webview = self.webview()?;
+        let delegate = self.active_delegate()?;
         for ch in text.chars() {
             let key = Key::Character(ch.to_string());
 
@@ -901,7 +1054,7 @@ impl PageEngine {
             wait_for_frame(
                 &self.servo,
                 &self.event_loop,
-                &self.delegate,
+                delegate,
                 Duration::from_secs(2),
             );
         }
@@ -911,6 +1064,7 @@ impl PageEngine {
     /// Press a single key by name (e.g. "Enter", "Tab", "a").
     pub fn key_press(&self, key_name: &str) -> Result<(), PageError> {
         let webview = self.webview()?;
+        let delegate = self.active_delegate()?;
         let key = parse_key_name(key_name);
 
         webview.notify_input_event(InputEvent::Keyboard(KeyboardEvent::from_state_and_key(
@@ -924,7 +1078,7 @@ impl PageEngine {
         wait_for_frame(
             &self.servo,
             &self.event_loop,
-            &self.delegate,
+            delegate,
             Duration::from_secs(2),
         );
 
@@ -934,12 +1088,13 @@ impl PageEngine {
     /// Move the mouse to the given device coordinates.
     pub fn mouse_move(&self, x: f32, y: f32) -> Result<(), PageError> {
         let webview = self.webview()?;
+        let delegate = self.active_delegate()?;
         let point = WebViewPoint::from(DevicePoint::new(x, y));
         webview.notify_input_event(InputEvent::MouseMove(MouseMoveEvent::new(point)));
         wait_for_frame(
             &self.servo,
             &self.event_loop,
-            &self.delegate,
+            delegate,
             Duration::from_secs(2),
         );
         Ok(())
@@ -950,9 +1105,10 @@ impl PageEngine {
     /// Scroll the viewport by the given pixel deltas using a native wheel event.
     pub fn scroll(&self, delta_x: f64, delta_y: f64) -> Result<(), PageError> {
         let webview = self.webview()?;
+        let page = self.active_page()?;
         let center = WebViewPoint::from(DevicePoint::new(
-            self.options.width as f32 / 2.0,
-            self.options.height as f32 / 2.0,
+            page.width as f32 / 2.0,
+            page.height as f32 / 2.0,
         ));
         // Servo's WheelDelta convention: positive y = scroll up (content moves down).
         // We negate so our API uses the intuitive convention: positive y = scroll down.
@@ -966,13 +1122,13 @@ impl PageEngine {
         wait_for_frame(
             &self.servo,
             &self.event_loop,
-            &self.delegate,
+            &page.delegate,
             Duration::from_secs(2),
         );
         wait_for_idle(
             &self.servo,
             &self.event_loop,
-            &self.delegate,
+            &page.delegate,
             Duration::from_millis(200),
             Duration::from_secs(2),
         );
@@ -982,6 +1138,7 @@ impl PageEngine {
     /// Scroll the element matching a CSS selector into view.
     pub fn scroll_to_selector(&self, selector: &str) -> Result<(), PageError> {
         let webview = self.webview()?;
+        let delegate = self.active_delegate()?;
         let escaped = selector.replace('\\', "\\\\").replace('\'', "\\'");
         let js = format!(
             "(function() {{ \
@@ -1002,7 +1159,7 @@ impl PageEngine {
                 wait_for_frame(
                     &self.servo,
                     &self.event_loop,
-                    &self.delegate,
+                    delegate,
                     Duration::from_secs(2),
                 );
                 Ok(())
@@ -1172,13 +1329,18 @@ impl PageEngine {
     // -- Request interception --
 
     /// Set URL patterns to block. Any request whose URL contains a pattern is cancelled.
-    pub fn block_urls(&self, patterns: Vec<String>) {
-        *self.delegate.blocked_url_patterns.borrow_mut() = patterns;
+    /// Requires an active page.
+    pub fn block_urls(&mut self, patterns: Vec<String>) {
+        if let Ok(delegate) = self.active_delegate() {
+            *delegate.blocked_url_patterns.borrow_mut() = patterns;
+        }
     }
 
     /// Clear all blocked URL patterns.
-    pub fn clear_blocked_urls(&self) {
-        self.delegate.blocked_url_patterns.borrow_mut().clear();
+    pub fn clear_blocked_urls(&mut self) {
+        if let Ok(delegate) = self.active_delegate() {
+            delegate.blocked_url_patterns.borrow_mut().clear();
+        }
     }
 
     // -- Navigation --
@@ -1186,7 +1348,8 @@ impl PageEngine {
     /// Reload the current page.
     pub fn reload(&self) -> Result<(), PageError> {
         let webview = self.webview()?;
-        self.delegate.load_complete.set(false);
+        let delegate = self.active_delegate()?;
+        delegate.load_complete.set(false);
         webview.reload();
         self.wait_for_load()
     }
@@ -1197,7 +1360,8 @@ impl PageEngine {
         if !webview.can_go_back() {
             return Ok(false);
         }
-        self.delegate.load_complete.set(false);
+        let delegate = self.active_delegate()?;
+        delegate.load_complete.set(false);
         webview.go_back(1);
         self.wait_for_load()?;
         Ok(true)
@@ -1209,7 +1373,8 @@ impl PageEngine {
         if !webview.can_go_forward() {
             return Ok(false);
         }
-        self.delegate.load_complete.set(false);
+        let delegate = self.active_delegate()?;
+        delegate.load_complete.set(false);
         webview.go_forward(1);
         self.wait_for_load()?;
         Ok(true)
@@ -1351,5 +1516,102 @@ impl PageEngine {
                 "unexpected html result: {other:?}"
             ))),
         }
+    }
+
+    // =====================================================================
+    // Multi-page methods
+    // =====================================================================
+
+    /// Create a new page with the default viewport size. Returns the page ID.
+    pub fn new_page(&mut self) -> Result<u32, PageError> {
+        self.create_page_internal(self.options.width, self.options.height)
+    }
+
+    /// Create a new page with a custom viewport size. Returns the page ID.
+    pub fn new_page_with_size(&mut self, width: u32, height: u32) -> Result<u32, PageError> {
+        self.create_page_internal(width, height)
+    }
+
+    /// Switch the active page to the given ID.
+    pub fn switch_to(&mut self, page_id: u32) -> Result<(), PageError> {
+        if !self.pages.contains_key(&page_id) {
+            return Err(PageError::NoPage);
+        }
+        self.active_page_id = Some(page_id);
+        Ok(())
+    }
+
+    /// Close a specific page by ID (removes it from the map).
+    /// If the closed page is the active page, `active_page_id` becomes `None`.
+    pub fn close_page(&mut self, page_id: u32) -> Result<(), PageError> {
+        if self.pages.remove(&page_id).is_none() {
+            return Err(PageError::NoPage);
+        }
+        if self.active_page_id == Some(page_id) {
+            self.active_page_id = None;
+        }
+        Ok(())
+    }
+
+    /// Get the active page ID, or `None` if no page is active.
+    pub fn active_page_id(&self) -> Option<u32> {
+        self.active_page_id
+    }
+
+    /// List all open page IDs (sorted).
+    pub fn page_ids(&self) -> Vec<u32> {
+        let mut ids: Vec<u32> = self.pages.keys().copied().collect();
+        ids.sort();
+        ids
+    }
+
+    /// Get the number of open pages.
+    pub fn page_count(&self) -> usize {
+        self.pages.len()
+    }
+
+    /// Enable or disable popup capture. When disabled (default), popups are blocked.
+    pub fn set_popup_handling(&mut self, enabled: bool) {
+        self.popup_enabled.set(enabled);
+    }
+
+    /// Drain pending popup WebViews, assign page IDs, and return them.
+    pub fn popup_pages(&mut self) -> Vec<u32> {
+        let popups: Vec<PendingPopup> = self.popup_buffer.borrow_mut().drain(..).collect();
+        let mut ids = Vec::with_capacity(popups.len());
+        for popup in popups {
+            let id = self.next_page_id;
+            self.next_page_id += 1;
+            let width = popup.delegate.default_width.get();
+            let height = popup.delegate.default_height.get();
+            self.pages.insert(
+                id,
+                PageState {
+                    webview: Some(popup.webview),
+                    rendering_context: popup.rendering_context,
+                    delegate: popup.delegate,
+                    width,
+                    height,
+                },
+            );
+            ids.push(id);
+        }
+        ids
+    }
+
+    /// Get the URL of a specific page by ID (without switching).
+    pub fn page_url(&self, page_id: u32) -> Option<String> {
+        self.pages
+            .get(&page_id)
+            .and_then(|p| p.webview.as_ref())
+            .and_then(|wv| wv.url().map(|u| u.to_string()))
+    }
+
+    /// Get the title of a specific page by ID (without switching).
+    pub fn page_title(&self, page_id: u32) -> Option<String> {
+        self.pages
+            .get(&page_id)
+            .and_then(|p| p.webview.as_ref())
+            .and_then(|wv| wv.page_title())
     }
 }
