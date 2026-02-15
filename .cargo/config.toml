@@ -1,0 +1,4 @@
+# Servo allows only one instance per process. All integration tests share
+# a global Page singleton and must run sequentially.
+[env]
+RUST_TEST_THREADS = "1"

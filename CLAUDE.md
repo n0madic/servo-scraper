@@ -18,7 +18,18 @@ make update-servo   # Update Servo submodule to latest main
 
 All builds use `cargo build --release`. There is no debug build target in the Makefile.
 
-### Testing / Smoke Tests
+### Testing
+
+```bash
+cargo test          # Run integration tests (~60-90s)
+make test           # Same thing via Makefile
+```
+
+The integration test suite (`tests/engine_integration.rs`) contains 53 tests covering all public `PageEngine`/`Page` methods — both success and error paths. Tests use a global `Page` singleton (Servo allows only one instance per process) with `data:text/html,...` URIs for fully self-contained, offline, deterministic operation.
+
+Tests must run single-threaded — `.cargo/config.toml` sets `RUST_TEST_THREADS=1` automatically, so plain `cargo test` works.
+
+### FFI Smoke Tests
 
 ```bash
 make test-c         # Build C example against shared library
@@ -27,7 +38,7 @@ make test-js        # Verify Node.js koffi binding loads
 make test-go        # Build Go example via CGo
 ```
 
-There are no unit tests or integration test suites — the "tests" are FFI smoke tests that verify the shared library loads and exports the expected symbols.
+FFI smoke tests verify the shared library loads and exports the expected symbols.
 
 ### Running the CLI
 
@@ -98,6 +109,7 @@ Three architectural layers (dependency graph: `types ← engine ← page ← ffi
 | `key_press(name)` | Press a named key (Enter, Tab, etc.) |
 | `mouse_move(x, y)` | Move mouse to coordinates |
 | `close()` | Drop the WebView |
+| `reset()` | Drop WebView + clear blocked URLs, console messages, network requests |
 
 ### Key Implementation Details
 

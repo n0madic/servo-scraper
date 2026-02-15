@@ -669,6 +669,15 @@ impl PageEngine {
         self.webview = None;
     }
 
+    /// Reset all state: drop the WebView, clear blocked URL patterns,
+    /// and drain buffered console messages and network requests.
+    pub fn reset(&mut self) {
+        self.delegate.blocked_url_patterns.borrow_mut().clear();
+        self.delegate.console_messages.borrow_mut().clear();
+        self.delegate.network_requests.borrow_mut().clear();
+        self.webview = None;
+    }
+
     // -- Phase 2: Wait mechanisms --
 
     /// Wait until a CSS selector matches an element on the page.

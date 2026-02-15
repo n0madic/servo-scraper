@@ -66,6 +66,16 @@ ServoPage *page_new(uint32_t width, uint32_t height, uint64_t timeout,
  */
 void page_free(ServoPage *page);
 
+/**
+ * Reset the page: drop the WebView and clear all internal state
+ * (blocked URL patterns, buffered console messages, network requests).
+ *
+ * After reset(), call page_open() to start a fresh session.
+ *
+ * @return PAGE_OK on success, or an error code.
+ */
+int page_reset(ServoPage *page);
+
 /* ── Navigation ────────────────────────────────────────────────────── */
 
 /**

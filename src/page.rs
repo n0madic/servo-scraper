@@ -45,6 +45,9 @@ enum Command {
     Close {
         response: mpsc::Sender<()>,
     },
+    Reset {
+        response: mpsc::Sender<()>,
+    },
     // Phase 2: Wait commands
     WaitForSelector {
         selector: String,
@@ -198,6 +201,10 @@ impl Page {
                     }
                     Command::Close { response } => {
                         engine.close();
+                        let _ = response.send(());
+                    }
+                    Command::Reset { response } => {
+                        engine.reset();
                         let _ = response.send(());
                     }
                     Command::WaitForSelector {
@@ -356,6 +363,10 @@ impl Page {
 
     pub fn close(&self) {
         let _ = self.send_cmd(|response| Command::Close { response });
+    }
+
+    pub fn reset(&self) {
+        let _ = self.send_cmd(|response| Command::Reset { response });
     }
 
     pub fn wait_for_selector(&self, selector: &str, timeout: u64) -> Result<(), PageError> {

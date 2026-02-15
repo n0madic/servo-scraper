@@ -155,6 +155,54 @@ def load_library(lib_path):
     lib.page_mouse_move.restype = c_int
     lib.page_mouse_move.argtypes = [c_void_p, c_float, c_float]
 
+    # page_reset(page) -> int
+    lib.page_reset.restype = c_int
+    lib.page_reset.argtypes = [c_void_p]
+
+    # page_get_cookies(page, &cookies, &len) -> int
+    lib.page_get_cookies.restype = c_int
+    lib.page_get_cookies.argtypes = [c_void_p, POINTER(c_char_p), POINTER(c_size_t)]
+
+    # page_set_cookie(page, cookie) -> int
+    lib.page_set_cookie.restype = c_int
+    lib.page_set_cookie.argtypes = [c_void_p, c_char_p]
+
+    # page_clear_cookies(page) -> int
+    lib.page_clear_cookies.restype = c_int
+    lib.page_clear_cookies.argtypes = [c_void_p]
+
+    # page_block_urls(page, patterns) -> int
+    lib.page_block_urls.restype = c_int
+    lib.page_block_urls.argtypes = [c_void_p, c_char_p]
+
+    # page_reload(page) -> int
+    lib.page_reload.restype = c_int
+    lib.page_reload.argtypes = [c_void_p]
+
+    # page_go_back(page) -> int
+    lib.page_go_back.restype = c_int
+    lib.page_go_back.argtypes = [c_void_p]
+
+    # page_go_forward(page) -> int
+    lib.page_go_forward.restype = c_int
+    lib.page_go_forward.argtypes = [c_void_p]
+
+    # page_element_rect(page, selector, &json, &len) -> int
+    lib.page_element_rect.restype = c_int
+    lib.page_element_rect.argtypes = [c_void_p, c_char_p, POINTER(c_char_p), POINTER(c_size_t)]
+
+    # page_element_text(page, selector, &text, &len) -> int
+    lib.page_element_text.restype = c_int
+    lib.page_element_text.argtypes = [c_void_p, c_char_p, POINTER(c_char_p), POINTER(c_size_t)]
+
+    # page_element_attribute(page, selector, attribute, &value, &len) -> int
+    lib.page_element_attribute.restype = c_int
+    lib.page_element_attribute.argtypes = [c_void_p, c_char_p, c_char_p, POINTER(c_char_p), POINTER(c_size_t)]
+
+    # page_element_html(page, selector, &html, &len) -> int
+    lib.page_element_html.restype = c_int
+    lib.page_element_html.argtypes = [c_void_p, c_char_p, POINTER(c_char_p), POINTER(c_size_t)]
+
     # page_buffer_free(data, len)
     lib.page_buffer_free.restype = None
     lib.page_buffer_free.argtypes = [POINTER(c_uint8), c_size_t]

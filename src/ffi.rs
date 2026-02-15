@@ -87,6 +87,22 @@ pub unsafe extern "C" fn page_free(page: *mut Page) {
     }
 }
 
+/// Reset all state: drop the WebView, clear blocked URL patterns,
+/// and drain buffered console messages and network requests.
+///
+/// # Safety
+///
+/// `page` must be a valid pointer from `page_new()`, or NULL.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn page_reset(page: *mut Page) -> i32 {
+    if page.is_null() {
+        return PAGE_ERR_NULL_PTR;
+    }
+    let page = unsafe { &*page };
+    page.reset();
+    PAGE_OK
+}
+
 // -- Navigation --
 
 /// Open a URL in the page.

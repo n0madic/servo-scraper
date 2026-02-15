@@ -1,10 +1,14 @@
 RELEASE_DIR = target/release
 
-.PHONY: build build-cli build-lib test-c test-python test-js test-go clean update-servo
+.PHONY: build build-cli build-lib test test-c test-python test-js test-go clean update-servo
 
 # Build everything (CLI binary + shared/static libraries)
 build:
 	cargo build --release
+
+# Run integration tests (single-threaded — PageEngine is !Send+!Sync)
+test:
+	cargo test -- --test-threads=1
 
 # Build only the CLI binary
 build-cli:
