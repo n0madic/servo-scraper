@@ -6,6 +6,7 @@
 
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
+#[cfg(unix)]
 use std::os::fd::{AsRawFd, IntoRawFd};
 use std::path::PathBuf;
 use std::rc::Rc;
@@ -33,6 +34,7 @@ use crate::types::{
 // Internal: Suppress stderr from system libraries
 // ---------------------------------------------------------------------------
 
+#[cfg(unix)]
 fn with_stderr_suppressed<T>(f: impl FnOnce() -> T) -> T {
     unsafe {
         let stderr_fd = std::io::stderr().as_raw_fd();
@@ -50,6 +52,35 @@ fn with_stderr_suppressed<T>(f: impl FnOnce() -> T) -> T {
                 return result;
             }
             libc::close(saved);
+        }
+    }
+    f()
+}
+
+#[cfg(windows)]
+fn with_stderr_suppressed<T>(f: impl FnOnce() -> T) -> T {
+    extern "C" {
+        fn _dup(fd: i32) -> i32;
+        fn _dup2(fd1: i32, fd2: i32) -> i32;
+        fn _open(filename: *const u8, oflag: i32, ...) -> i32;
+        fn _close(fd: i32) -> i32;
+    }
+    const STDERR_FILENO: i32 = 2;
+    const O_WRONLY: i32 = 0x0001;
+
+    unsafe {
+        let saved = _dup(STDERR_FILENO);
+        if saved >= 0 {
+            let nul = _open(b"NUL\0".as_ptr(), O_WRONLY);
+            if nul >= 0 {
+                _dup2(nul, STDERR_FILENO);
+                _close(nul);
+                let result = f();
+                _dup2(saved, STDERR_FILENO);
+                _close(saved);
+                return result;
+            }
+            _close(saved);
         }
     }
     f()
