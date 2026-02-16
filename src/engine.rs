@@ -548,6 +548,12 @@ fn jsvalue_to_json(value: &JSValue) -> String {
     }
 }
 
+/// Produce a properly escaped, double-quoted JS string literal using serde_json.
+/// Handles backslashes, quotes, newlines, tabs, null bytes, and all Unicode control chars.
+fn js_string_literal(s: &str) -> String {
+    serde_json::to_string(s).unwrap_or_else(|_| format!("\"{}\"", s))
+}
+
 /// Map a key name string to a `Key`.
 fn parse_key_name(name: &str) -> Key {
     match name {
@@ -784,7 +790,7 @@ impl PageEngine {
             js,
             self.options.timeout,
         ) {
-            let doc_height = doc_height as u32;
+            let mut doc_height = doc_height as u32;
             if doc_height > page.height {
                 let new_size = PhysicalSize::new(page.width, doc_height);
                 webview.resize(new_size);
@@ -804,9 +810,38 @@ impl PageEngine {
                     &self.servo,
                     &self.event_loop,
                     &page.delegate,
-                    Duration::from_millis(500),
-                    Duration::from_secs(5),
+                    Duration::from_secs_f64(self.options.wait),
+                    Duration::from_secs(self.options.timeout),
                 );
+
+                // Re-check height — DOM may have changed during the wait.
+                // One retry to handle the common case without risking infinite loops.
+                if let Ok(JSValue::Number(new_height)) = eval_js(
+                    &self.servo,
+                    &self.event_loop,
+                    webview,
+                    js,
+                    self.options.timeout,
+                ) {
+                    let new_height = new_height as u32;
+                    if new_height != doc_height && new_height > page.height {
+                        doc_height = new_height;
+                        webview.resize(PhysicalSize::new(page.width, doc_height));
+                        wait_for_frame(
+                            &self.servo,
+                            &self.event_loop,
+                            &page.delegate,
+                            Duration::from_secs(self.options.timeout),
+                        );
+                        wait_for_idle(
+                            &self.servo,
+                            &self.event_loop,
+                            &page.delegate,
+                            Duration::from_secs_f64(self.options.wait),
+                            Duration::from_secs(self.options.timeout),
+                        );
+                    }
+                }
             }
         }
         take_screenshot_bytes(&self.servo, &self.event_loop, webview, self.options.timeout)
@@ -867,8 +902,8 @@ impl PageEngine {
     pub fn wait_for_selector(&self, selector: &str, timeout_secs: u64) -> Result<(), PageError> {
         let webview = self.webview()?;
         let delegate = self.active_delegate()?;
-        let escaped = selector.replace('\\', "\\\\").replace('\'', "\\'");
-        let js = format!("document.querySelector('{escaped}') !== null");
+        let escaped = js_string_literal(selector);
+        let js = format!("document.querySelector({escaped}) !== null");
 
         let deadline = Instant::now() + Duration::from_secs(timeout_secs);
         loop {
@@ -884,7 +919,7 @@ impl PageEngine {
                 &self.servo,
                 &self.event_loop,
                 delegate,
-                Duration::from_secs(1),
+                Duration::from_millis(200),
             );
         }
     }
@@ -915,7 +950,7 @@ impl PageEngine {
                 &self.servo,
                 &self.event_loop,
                 delegate,
-                Duration::from_secs(1),
+                Duration::from_millis(200),
             );
         }
     }
@@ -999,10 +1034,10 @@ impl PageEngine {
     /// Click on an element matching a CSS selector.
     pub fn click_selector(&self, selector: &str) -> Result<(), PageError> {
         let webview = self.webview()?;
-        let escaped = selector.replace('\\', "\\\\").replace('\'', "\\'");
+        let escaped = js_string_literal(selector);
         let js = format!(
             "(function() {{ \
-                var el = document.querySelector('{escaped}'); \
+                var el = document.querySelector({escaped}); \
                 if (!el) return null; \
                 var r = el.getBoundingClientRect(); \
                 return [r.left + r.width/2, r.top + r.height/2]; \
@@ -1139,10 +1174,10 @@ impl PageEngine {
     pub fn scroll_to_selector(&self, selector: &str) -> Result<(), PageError> {
         let webview = self.webview()?;
         let delegate = self.active_delegate()?;
-        let escaped = selector.replace('\\', "\\\\").replace('\'', "\\'");
+        let escaped = js_string_literal(selector);
         let js = format!(
             "(function() {{ \
-                var el = document.querySelector('{escaped}'); \
+                var el = document.querySelector({escaped}); \
                 if (!el) return null; \
                 el.scrollIntoView({{behavior: 'instant', block: 'center'}}); \
                 return true; \
@@ -1176,16 +1211,16 @@ impl PageEngine {
     /// Select an option in a `<select>` element by value.
     pub fn select_option(&self, selector: &str, value: &str) -> Result<(), PageError> {
         let webview = self.webview()?;
-        let esc_sel = selector.replace('\\', "\\\\").replace('\'', "\\'");
-        let esc_val = value.replace('\\', "\\\\").replace('\'', "\\'");
+        let esc_sel = js_string_literal(selector);
+        let esc_val = js_string_literal(value);
         let js = format!(
             "(function() {{ \
-                var el = document.querySelector('{esc_sel}'); \
+                var el = document.querySelector({esc_sel}); \
                 if (!el) return 'not_found'; \
                 if (el.tagName !== 'SELECT') return 'not_select'; \
-                var opt = Array.from(el.options).find(function(o) {{ return o.value === '{esc_val}'; }}); \
+                var opt = Array.from(el.options).find(function(o) {{ return o.value === {esc_val}; }}); \
                 if (!opt) return 'no_option'; \
-                el.value = '{esc_val}'; \
+                el.value = {esc_val}; \
                 el.dispatchEvent(new Event('input', {{bubbles: true}})); \
                 el.dispatchEvent(new Event('change', {{bubbles: true}})); \
                 return 'ok'; \
@@ -1219,23 +1254,23 @@ impl PageEngine {
     /// Set files on an `<input type="file">` element using the DataTransfer API.
     pub fn set_input_files(&self, selector: &str, files: &[InputFile]) -> Result<(), PageError> {
         let webview = self.webview()?;
-        let esc_sel = selector.replace('\\', "\\\\").replace('\'', "\\'");
+        let esc_sel = js_string_literal(selector);
 
         use base64::Engine as _;
         let file_entries: Vec<String> = files
             .iter()
             .map(|f| {
                 let b64 = base64::engine::general_purpose::STANDARD.encode(&f.data);
-                let esc_name = f.name.replace('\\', "\\\\").replace('\'', "\\'");
-                let esc_mime = f.mime_type.replace('\\', "\\\\").replace('\'', "\\'");
-                format!("{{name:'{esc_name}',mime:'{esc_mime}',b64:'{b64}'}}")
+                let esc_name = js_string_literal(&f.name);
+                let esc_mime = js_string_literal(&f.mime_type);
+                format!("{{name:{esc_name},mime:{esc_mime},b64:'{b64}'}}")
             })
             .collect();
         let files_js = file_entries.join(",");
 
         let js = format!(
             "(function() {{ \
-                var input = document.querySelector('{esc_sel}'); \
+                var input = document.querySelector({esc_sel}); \
                 if (!input) return 'not_found'; \
                 if (input.type !== 'file') return 'not_file'; \
                 var dt = new DataTransfer(); \
@@ -1292,8 +1327,8 @@ impl PageEngine {
     /// Set a cookie via `document.cookie = '...'`.
     pub fn set_cookie(&self, cookie: &str) -> Result<(), PageError> {
         let webview = self.webview()?;
-        let escaped = cookie.replace('\\', "\\\\").replace('\'', "\\'");
-        let js = format!("document.cookie = '{escaped}'");
+        let escaped = js_string_literal(cookie);
+        let js = format!("document.cookie = {escaped}");
         eval_js(
             &self.servo,
             &self.event_loop,
@@ -1385,10 +1420,10 @@ impl PageEngine {
     /// Get the bounding rectangle of the first element matching a CSS selector.
     pub fn element_rect(&self, selector: &str) -> Result<ElementRect, PageError> {
         let webview = self.webview()?;
-        let escaped = selector.replace('\\', "\\\\").replace('\'', "\\'");
+        let escaped = js_string_literal(selector);
         let js = format!(
             "(function() {{ \
-                var el = document.querySelector('{escaped}'); \
+                var el = document.querySelector({escaped}); \
                 if (!el) return null; \
                 var r = el.getBoundingClientRect(); \
                 return [r.x, r.y, r.width, r.height]; \
@@ -1429,10 +1464,10 @@ impl PageEngine {
     /// Get the text content of the first element matching a CSS selector.
     pub fn element_text(&self, selector: &str) -> Result<String, PageError> {
         let webview = self.webview()?;
-        let escaped = selector.replace('\\', "\\\\").replace('\'', "\\'");
+        let escaped = js_string_literal(selector);
         let js = format!(
             "(function() {{ \
-                var el = document.querySelector('{escaped}'); \
+                var el = document.querySelector({escaped}); \
                 if (!el) return null; \
                 return el.textContent; \
             }})()"
@@ -1463,13 +1498,13 @@ impl PageEngine {
         attribute: &str,
     ) -> Result<Option<String>, PageError> {
         let webview = self.webview()?;
-        let esc_sel = selector.replace('\\', "\\\\").replace('\'', "\\'");
-        let esc_attr = attribute.replace('\\', "\\\\").replace('\'', "\\'");
+        let esc_sel = js_string_literal(selector);
+        let esc_attr = js_string_literal(attribute);
         let js = format!(
             "(function() {{ \
-                var el = document.querySelector('{esc_sel}'); \
+                var el = document.querySelector({esc_sel}); \
                 if (!el) return undefined; \
-                return el.getAttribute('{esc_attr}'); \
+                return el.getAttribute({esc_attr}); \
             }})()"
         );
 
@@ -1492,10 +1527,10 @@ impl PageEngine {
     /// Get the outer HTML of the first element matching a CSS selector.
     pub fn element_html(&self, selector: &str) -> Result<String, PageError> {
         let webview = self.webview()?;
-        let escaped = selector.replace('\\', "\\\\").replace('\'', "\\'");
+        let escaped = js_string_literal(selector);
         let js = format!(
             "(function() {{ \
-                var el = document.querySelector('{escaped}'); \
+                var el = document.querySelector({escaped}); \
                 if (!el) return null; \
                 return el.outerHTML; \
             }})()"

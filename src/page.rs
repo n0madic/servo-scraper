@@ -742,13 +742,12 @@ impl Page {
 
 impl Drop for Page {
     fn drop(&mut self) {
-        if let Ok(sender) = self.sender.lock() {
-            let _ = sender.send(Command::Shutdown);
-        }
-        if let Ok(mut handle) = self.thread.lock() {
-            if let Some(thread) = handle.take() {
-                let _ = thread.join();
-            }
+        let sender = self.sender.lock().unwrap_or_else(|e| e.into_inner());
+        let _ = sender.send(Command::Shutdown);
+        drop(sender);
+        let mut handle = self.thread.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(thread) = handle.take() {
+            let _ = thread.join();
         }
     }
 }

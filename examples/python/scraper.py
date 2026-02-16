@@ -272,7 +272,8 @@ def main():
                 file=sys.stderr,
             )
         else:
-            data = bytes(png_data[: png_len.value])
+            length = png_len.value
+            data = bytes(png_data[:length])
             lib.page_buffer_free(png_data, png_len)
             with open(png_path, "wb") as f:
                 f.write(data)
