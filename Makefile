@@ -1,6 +1,18 @@
 RELEASE_DIR = target/release
+DIST_DIR = dist
+VERSION ?= $(shell sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
 
-.PHONY: build build-cli build-lib test test-c test-python test-js test-go clean update-servo
+# Platform-specific library extensions
+DYLIB_EXT_MACOS = dylib
+DYLIB_EXT_LINUX = so
+
+# Target triples
+TARGET_MACOS_ARM64 = aarch64-apple-darwin
+TARGET_MACOS_X86_64 = x86_64-apple-darwin
+TARGET_LINUX_X86_64 = x86_64-unknown-linux-gnu
+
+.PHONY: build build-cli build-lib test test-c test-python test-js test-go clean update-servo \
+	release-macos-arm64 release-macos-x86_64 release-linux-x86_64 release-all release
 
 # Build everything (CLI binary + shared/static libraries)
 build:
@@ -56,6 +68,7 @@ test-go: build-lib
 # Clean build artifacts
 clean:
 	cargo clean
+	rm -rf $(DIST_DIR)
 
 # Update the Servo submodule to the latest main branch commit
 update-servo:
@@ -63,3 +76,56 @@ update-servo:
 	git -C servo checkout origin/main
 	git add servo
 	@echo "Servo updated to $$(git -C servo rev-parse --short HEAD). Don't forget to commit."
+
+# ---------------------------------------------------------------------------
+# Release packaging
+# ---------------------------------------------------------------------------
+# Prerequisites (one-time setup):
+#   rustup target add x86_64-apple-darwin
+#   cargo install cross --git https://github.com/cross-rs/cross
+#   Docker must be running (for Linux builds)
+#   brew install gh && gh auth login
+
+define package_release
+	@echo "==> Packaging $(1)..."
+	mkdir -p $(DIST_DIR)/servo-scraper-$(VERSION)-$(1)
+	cp $(2)/servo-scraper                     $(DIST_DIR)/servo-scraper-$(VERSION)-$(1)/
+	cp $(2)/libservo_scraper.$(3)             $(DIST_DIR)/servo-scraper-$(VERSION)-$(1)/
+	cp $(2)/libservo_scraper.a                $(DIST_DIR)/servo-scraper-$(VERSION)-$(1)/
+	cp examples/c/servo_scraper.h             $(DIST_DIR)/servo-scraper-$(VERSION)-$(1)/
+	cp README.md                              $(DIST_DIR)/servo-scraper-$(VERSION)-$(1)/
+	tar -czf $(DIST_DIR)/servo-scraper-$(VERSION)-$(1).tar.gz \
+		-C $(DIST_DIR) servo-scraper-$(VERSION)-$(1)
+	rm -rf $(DIST_DIR)/servo-scraper-$(VERSION)-$(1)
+	@echo "==> Created $(DIST_DIR)/servo-scraper-$(VERSION)-$(1).tar.gz"
+endef
+
+# macOS ARM64 (native build on Apple Silicon)
+release-macos-arm64:
+	cargo build --release
+	$(call package_release,macos-arm64,target/release,$(DYLIB_EXT_MACOS))
+
+# macOS x86_64 (cross-compile via Apple universal SDK)
+release-macos-x86_64:
+	cargo build --release --target $(TARGET_MACOS_X86_64)
+	$(call package_release,macos-x86_64,target/$(TARGET_MACOS_X86_64)/release,$(DYLIB_EXT_MACOS))
+
+# Linux x86_64 (cross-compile via Docker using `cross`)
+release-linux-x86_64:
+	cross build --release --target $(TARGET_LINUX_X86_64)
+	$(call package_release,linux-x86_64,target/$(TARGET_LINUX_X86_64)/release,$(DYLIB_EXT_LINUX))
+
+# Build all platforms
+release-all: release-macos-arm64 release-macos-x86_64 release-linux-x86_64
+
+# Full release: build all platforms, tag, push, and create GitHub release
+release: release-all
+	@if [ -z "$(VERSION)" ]; then echo "ERROR: VERSION not set"; exit 1; fi
+	@echo "==> Creating release v$(VERSION)..."
+	git tag -a "v$(VERSION)" -m "Release v$(VERSION)" 2>/dev/null || \
+		echo "    Tag v$(VERSION) already exists, skipping"
+	git push origin "v$(VERSION)"
+	gh release create "v$(VERSION)" $(DIST_DIR)/*.tar.gz \
+		--title "v$(VERSION)" \
+		--generate-notes
+	@echo "==> Release v$(VERSION) published!"

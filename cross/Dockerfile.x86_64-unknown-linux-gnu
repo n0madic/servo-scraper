@@ -1,0 +1,38 @@
+FROM ghcr.io/cross-rs/x86_64-unknown-linux-gnu:main
+
+# Servo build dependencies:
+# - python3.11: required by script_bindings (needs typing.TypeGuard, added in 3.10);
+#   Ubuntu 20.04 ships 3.8, so we compile from source
+# - cmake: required by various native C/C++ dependencies
+# - clang/libclang-dev: required by bindgen for FFI generation
+# - pkg-config + libfreetype6-dev + libfontconfig1-dev: font rendering
+# - libglib2.0-dev: GLib (used by several Servo components)
+# - libssl-dev: TLS support
+# - libdbus-1-dev: D-Bus (optional, but avoids build warnings)
+
+# Install system packages first
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    cmake \
+    clang \
+    libclang-dev \
+    pkg-config \
+    libfreetype6-dev \
+    libfontconfig1-dev \
+    libglib2.0-dev \
+    libssl-dev \
+    libdbus-1-dev \
+    wget \
+    build-essential \
+    zlib1g-dev \
+    libffi-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# Build Python 3.11 from source (Ubuntu 20.04's Python 3.8 is too old for Servo)
+RUN wget -q https://www.python.org/ftp/python/3.11.11/Python-3.11.11.tgz \
+    && tar xzf Python-3.11.11.tgz \
+    && cd Python-3.11.11 \
+    && ./configure --prefix=/usr/local --without-ensurepip >/dev/null 2>&1 \
+    && make -j$(nproc) -s \
+    && make install -s \
+    && cd .. && rm -rf Python-3.11.11 Python-3.11.11.tgz \
+    && ln -sf /usr/local/bin/python3.11 /usr/bin/python3

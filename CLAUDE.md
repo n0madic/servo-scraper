@@ -12,7 +12,7 @@ servo-scraper is a headless web scraper built on the Servo browser engine. It pr
 make build          # Build everything (CLI binary + shared/static libraries)
 make build-cli      # Build only the CLI binary
 make build-lib      # Build only the library (rlib + cdylib + staticlib)
-make clean          # Clean build artifacts
+make clean          # Clean build artifacts + dist/
 make update-servo   # Update Servo submodule to latest main
 ```
 
@@ -194,3 +194,45 @@ Three architectural layers (dependency graph: `types ← engine ← page ← ffi
 - macOS: shared library is `.dylib`, runtime needs `DYLD_LIBRARY_PATH=target/release` for FFI examples.
 - Linux: shared library is `.so`, runtime needs `LD_LIBRARY_PATH=target/release`.
 - The `test-python` and `test-js` Makefile targets hardcode `.dylib` (macOS-only).
+- Windows: stderr suppression uses MSVC CRT functions (`_dup`, `_dup2`, `_open("NUL", ...)`) via `#[cfg(windows)]` — separate from the Unix `libc::dup`/`/dev/null` path. Servo itself may have additional platform limitations.
+
+## Cross-Compilation & Releases
+
+Local cross-compilation script (host: macOS ARM64). No CI/CD — builds run locally and publish to GitHub Releases via `gh`.
+
+### Target Platforms
+
+| Platform | Method | Shared lib ext |
+|---|---|---|
+| macOS ARM64 | Native `cargo build --release` | `.dylib` |
+| macOS x86_64 | `cargo build --release --target x86_64-apple-darwin` | `.dylib` |
+| Linux x86_64 | `cross build --release --target x86_64-unknown-linux-gnu` | `.so` |
+
+### Release Commands
+
+```bash
+make release-macos-arm64     # Build + package macOS ARM64
+make release-macos-x86_64    # Build + package macOS x86_64
+make release-linux-x86_64    # Build + package Linux x86_64 (requires Docker)
+make release-all             # Build + package all platforms
+make release VERSION=0.1.0   # Build all + git tag + push + gh release create
+```
+
+VERSION defaults to the version in `Cargo.toml` if not specified.
+
+Each `release-*` target builds the binary + libraries, then packages into `dist/servo-scraper-{VERSION}-{PLATFORM}.tar.gz` containing: CLI binary, shared library, static library, C header (`servo_scraper.h`), and `README.md`.
+
+### Prerequisites (one-time setup)
+
+```bash
+rustup target add x86_64-apple-darwin
+cargo install cross --git https://github.com/cross-rs/cross
+brew install gh && gh auth login
+# Docker must be running for Linux builds
+```
+
+### Configuration Files
+
+- **`Cross.toml`** — Configuration for `cross` (Linux cross-compilation via Docker). Points to a custom Dockerfile.
+- **`cross/Dockerfile.x86_64-unknown-linux-gnu`** — Custom Docker image extending `cross`'s base with Servo build dependencies (`python3`, `cmake`, `clang`, `libclang-dev`, `pkg-config`, font/glib/ssl/dbus dev libraries).
+- Release archives are output to `dist/` (gitignored).
