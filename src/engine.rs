@@ -35,6 +35,19 @@ use crate::types::{
 // ---------------------------------------------------------------------------
 
 #[cfg(unix)]
+struct StderrGuard(i32);
+
+#[cfg(unix)]
+impl Drop for StderrGuard {
+    fn drop(&mut self) {
+        unsafe {
+            libc::dup2(self.0, std::io::stderr().as_raw_fd());
+            libc::close(self.0);
+        }
+    }
+}
+
+#[cfg(unix)]
 fn with_stderr_suppressed<T>(f: impl FnOnce() -> T) -> T {
     unsafe {
         let stderr_fd = std::io::stderr().as_raw_fd();
@@ -46,10 +59,8 @@ fn with_stderr_suppressed<T>(f: impl FnOnce() -> T) -> T {
             if devnull >= 0 {
                 libc::dup2(devnull, stderr_fd);
                 libc::close(devnull);
-                let result = f();
-                libc::dup2(saved, stderr_fd);
-                libc::close(saved);
-                return result;
+                let _guard = StderrGuard(saved);
+                return f();
             }
             libc::close(saved);
         }
@@ -58,11 +69,28 @@ fn with_stderr_suppressed<T>(f: impl FnOnce() -> T) -> T {
 }
 
 #[cfg(windows)]
+struct StderrGuardWin(i32);
+
+#[cfg(windows)]
+impl Drop for StderrGuardWin {
+    fn drop(&mut self) {
+        extern "C" {
+            fn _dup2(fd1: i32, fd2: i32) -> i32;
+            fn _close(fd: i32) -> i32;
+        }
+        unsafe {
+            _dup2(self.0, 2);
+            _close(self.0);
+        }
+    }
+}
+
+#[cfg(windows)]
 fn with_stderr_suppressed<T>(f: impl FnOnce() -> T) -> T {
     extern "C" {
         fn _dup(fd: i32) -> i32;
         fn _dup2(fd1: i32, fd2: i32) -> i32;
-        fn _open(filename: *const u8, oflag: i32, ...) -> i32;
+        fn _open(filename: *const std::ffi::c_char, oflag: i32, ...) -> i32;
         fn _close(fd: i32) -> i32;
     }
     const STDERR_FILENO: i32 = 2;
@@ -71,14 +99,12 @@ fn with_stderr_suppressed<T>(f: impl FnOnce() -> T) -> T {
     unsafe {
         let saved = _dup(STDERR_FILENO);
         if saved >= 0 {
-            let nul = _open(b"NUL\0".as_ptr(), O_WRONLY);
+            let nul = _open(b"NUL\0".as_ptr().cast(), O_WRONLY);
             if nul >= 0 {
                 _dup2(nul, STDERR_FILENO);
                 _close(nul);
-                let result = f();
-                _dup2(saved, STDERR_FILENO);
-                _close(saved);
-                return result;
+                let _guard = StderrGuardWin(saved);
+                return f();
             }
             _close(saved);
         }
@@ -983,8 +1009,9 @@ impl PageEngine {
 
         let deadline = Instant::now() + Duration::from_secs(timeout_secs);
         loop {
+            let remaining = deadline.saturating_duration_since(Instant::now()).as_secs().max(1);
             if let Ok(JSValue::Boolean(true)) =
-                eval_js(&self.servo, &self.event_loop, webview, &js, timeout_secs)
+                eval_js(&self.servo, &self.event_loop, webview, &js, remaining)
             {
                 return Ok(());
             }
@@ -1006,12 +1033,13 @@ impl PageEngine {
         let delegate = self.active_delegate()?;
         let deadline = Instant::now() + Duration::from_secs(timeout_secs);
         loop {
+            let remaining = deadline.saturating_duration_since(Instant::now()).as_secs().max(1);
             match eval_js(
                 &self.servo,
                 &self.event_loop,
                 webview,
                 js_expr,
-                timeout_secs,
+                remaining,
             ) {
                 Ok(JSValue::Boolean(true)) => return Ok(()),
                 Ok(JSValue::Number(n)) if n != 0.0 => return Ok(()),
@@ -1041,6 +1069,12 @@ impl PageEngine {
     }
 
     /// Wait for the next navigation to complete.
+    ///
+    /// Clears the load-complete flag and waits for it to be set again.
+    /// Should be called after triggering a navigation (e.g., via `evaluate`
+    /// with `window.location.href = ...`). If the navigation completes
+    /// between the flag clear and the wait, the next load event will be
+    /// caught correctly because the event loop is single-threaded.
     pub fn wait_for_navigation(&self, timeout_secs: u64) -> Result<(), PageError> {
         self.webview()?;
         let delegate = self.active_delegate()?;
@@ -1062,8 +1096,18 @@ impl PageEngine {
     pub fn wait_for_network_idle(&self, idle_ms: u64, timeout_secs: u64) -> Result<(), PageError> {
         self.webview()?;
         let delegate = self.active_delegate()?;
+        // If no requests have been seen yet, give the event loop a brief
+        // chance to start processing — an immediate return would be a false
+        // "idle" signal when called right after open().
         if delegate.last_request_time.get().is_none() {
-            return Ok(());
+            spin_for(
+                &self.servo,
+                &self.event_loop,
+                Duration::from_millis(idle_ms),
+            );
+            if delegate.last_request_time.get().is_none() {
+                return Ok(());
+            }
         }
         let settled = wait_for_network_idle_inner(
             &self.servo,
@@ -1162,13 +1206,13 @@ impl PageEngine {
                 KeyState::Up,
                 key,
             )));
-            wait_for_frame(
-                &self.servo,
-                &self.event_loop,
-                delegate,
-                Duration::from_secs(2),
-            );
         }
+        wait_for_frame(
+            &self.servo,
+            &self.event_loop,
+            delegate,
+            Duration::from_secs(2),
+        );
         Ok(())
     }
 
