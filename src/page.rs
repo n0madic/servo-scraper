@@ -219,9 +219,6 @@ pub struct Page {
     thread: Mutex<Option<thread::JoinHandle<()>>>,
 }
 
-unsafe impl Send for Page {}
-unsafe impl Sync for Page {}
-
 impl Page {
     /// Create a new thread-safe page handle.
     pub fn new(options: PageOptions) -> Result<Self, PageError> {
