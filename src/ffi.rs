@@ -31,6 +31,26 @@ fn error_code(e: &PageError) -> i32 {
     }
 }
 
+/// Create a `CString` from a Rust string, stripping any interior null bytes
+/// that would cause `CString::new` to fail.
+fn to_cstring(s: String) -> std::ffi::CString {
+    let bytes: Vec<u8> = s.into_bytes().into_iter().filter(|&b| b != 0).collect();
+    unsafe { std::ffi::CString::from_vec_unchecked(bytes) }
+}
+
+/// Write a Rust string to FFI out-pointers as a null-terminated C string.
+/// Strips interior null bytes. Returns `PAGE_OK`.
+unsafe fn write_string_out(s: String, out_ptr: *mut *mut std::ffi::c_char, out_len: *mut usize) -> i32 {
+    let cstr = to_cstring(s);
+    let len = cstr.as_bytes().len();
+    let ptr = cstr.into_raw();
+    unsafe {
+        *out_ptr = ptr;
+        *out_len = len;
+    }
+    PAGE_OK
+}
+
 // -- Lifecycle --
 
 /// Create a new page instance.
@@ -58,7 +78,7 @@ pub unsafe extern "C" fn page_new(
     } else {
         match unsafe { std::ffi::CStr::from_ptr(user_agent) }.to_str() {
             Ok(s) => Some(s.to_string()),
-            Err(_) => None,
+            Err(_) => return std::ptr::null_mut(),
         }
     };
     let options = PageOptions {
@@ -152,18 +172,7 @@ pub unsafe extern "C" fn page_evaluate(
         Err(_) => return PAGE_ERR_JS,
     };
     match page.evaluate(script_str) {
-        Ok(json) => match std::ffi::CString::new(json) {
-            Ok(cstr) => {
-                let len = cstr.as_bytes().len();
-                let ptr = cstr.into_raw();
-                unsafe {
-                    *out_json = ptr;
-                    *out_len = len;
-                }
-                PAGE_OK
-            }
-            Err(_) => PAGE_ERR_JS,
-        },
+        Ok(json) => unsafe { write_string_out(json, out_json, out_len) },
         Err(e) => error_code(&e),
     }
 }
@@ -248,18 +257,7 @@ pub unsafe extern "C" fn page_html(
     }
     let page = unsafe { &*page };
     match page.html() {
-        Ok(html) => match std::ffi::CString::new(html) {
-            Ok(cstr) => {
-                let len = cstr.as_bytes().len();
-                let ptr = cstr.into_raw();
-                unsafe {
-                    *out_html = ptr;
-                    *out_len = len;
-                }
-                PAGE_OK
-            }
-            Err(_) => PAGE_ERR_JS,
-        },
+        Ok(html) => unsafe { write_string_out(html, out_html, out_len) },
         Err(e) => error_code(&e),
     }
 }
@@ -282,18 +280,7 @@ pub unsafe extern "C" fn page_url(
     }
     let page = unsafe { &*page };
     match page.url() {
-        Some(url_str) => match std::ffi::CString::new(url_str) {
-            Ok(cstr) => {
-                let len = cstr.as_bytes().len();
-                let ptr = cstr.into_raw();
-                unsafe {
-                    *out_url = ptr;
-                    *out_len = len;
-                }
-                PAGE_OK
-            }
-            Err(_) => PAGE_ERR_JS,
-        },
+        Some(url_str) => unsafe { write_string_out(url_str, out_url, out_len) },
         None => PAGE_ERR_NO_PAGE,
     }
 }
@@ -314,18 +301,7 @@ pub unsafe extern "C" fn page_title(
     }
     let page = unsafe { &*page };
     match page.title() {
-        Some(title_str) => match std::ffi::CString::new(title_str) {
-            Ok(cstr) => {
-                let len = cstr.as_bytes().len();
-                let ptr = cstr.into_raw();
-                unsafe {
-                    *out_title = ptr;
-                    *out_len = len;
-                }
-                PAGE_OK
-            }
-            Err(_) => PAGE_ERR_JS,
-        },
+        Some(title_str) => unsafe { write_string_out(title_str, out_title, out_len) },
         None => PAGE_ERR_NO_PAGE,
     }
 }
@@ -349,18 +325,7 @@ pub unsafe extern "C" fn page_console_messages(
     let page = unsafe { &*page };
     let msgs = page.console_messages();
     let json = serde_json::to_string(&msgs).unwrap_or_else(|_| "[]".to_string());
-    match std::ffi::CString::new(json) {
-        Ok(cstr) => {
-            let len = cstr.as_bytes().len();
-            let ptr = cstr.into_raw();
-            unsafe {
-                *out_json = ptr;
-                *out_len = len;
-            }
-            PAGE_OK
-        }
-        Err(_) => PAGE_ERR_JS,
-    }
+    unsafe { write_string_out(json, out_json, out_len) }
 }
 
 /// Get network requests as a JSON array.
@@ -380,18 +345,7 @@ pub unsafe extern "C" fn page_network_requests(
     let page = unsafe { &*page };
     let reqs = page.network_requests();
     let json = serde_json::to_string(&reqs).unwrap_or_else(|_| "[]".to_string());
-    match std::ffi::CString::new(json) {
-        Ok(cstr) => {
-            let len = cstr.as_bytes().len();
-            let ptr = cstr.into_raw();
-            unsafe {
-                *out_json = ptr;
-                *out_len = len;
-            }
-            PAGE_OK
-        }
-        Err(_) => PAGE_ERR_JS,
-    }
+    unsafe { write_string_out(json, out_json, out_len) }
 }
 
 // -- Wait FFI --
@@ -771,18 +725,7 @@ pub unsafe extern "C" fn page_get_cookies(
     }
     let page = unsafe { &*page };
     match page.get_cookies() {
-        Ok(cookies) => match std::ffi::CString::new(cookies) {
-            Ok(cstr) => {
-                let len = cstr.as_bytes().len();
-                let ptr = cstr.into_raw();
-                unsafe {
-                    *out_cookies = ptr;
-                    *out_len = len;
-                }
-                PAGE_OK
-            }
-            Err(_) => PAGE_ERR_JS,
-        },
+        Ok(cookies) => unsafe { write_string_out(cookies, out_cookies, out_len) },
         Err(e) => error_code(&e),
     }
 }
@@ -877,7 +820,8 @@ pub unsafe extern "C" fn page_reload(page: *mut Page) -> i32 {
     }
 }
 
-/// Navigate back in history. Returns `PAGE_ERR_NO_PAGE` if no history.
+/// Navigate back in history. Returns `PAGE_OK` even if there is no history
+/// (no-op in that case).
 ///
 /// # Safety
 ///
@@ -889,13 +833,13 @@ pub unsafe extern "C" fn page_go_back(page: *mut Page) -> i32 {
     }
     let page = unsafe { &*page };
     match page.go_back() {
-        Ok(true) => PAGE_OK,
-        Ok(false) => PAGE_ERR_NO_PAGE,
+        Ok(_) => PAGE_OK,
         Err(e) => error_code(&e),
     }
 }
 
-/// Navigate forward in history. Returns `PAGE_ERR_NO_PAGE` if no forward history.
+/// Navigate forward in history. Returns `PAGE_OK` even if there is no forward
+/// history (no-op in that case).
 ///
 /// # Safety
 ///
@@ -907,8 +851,7 @@ pub unsafe extern "C" fn page_go_forward(page: *mut Page) -> i32 {
     }
     let page = unsafe { &*page };
     match page.go_forward() {
-        Ok(true) => PAGE_OK,
-        Ok(false) => PAGE_ERR_NO_PAGE,
+        Ok(_) => PAGE_OK,
         Err(e) => error_code(&e),
     }
 }
@@ -938,18 +881,7 @@ pub unsafe extern "C" fn page_element_rect(
     match page.element_rect(sel) {
         Ok(rect) => {
             let json = serde_json::to_string(&rect).unwrap_or_else(|_| "{}".to_string());
-            match std::ffi::CString::new(json) {
-                Ok(cstr) => {
-                    let len = cstr.as_bytes().len();
-                    let ptr = cstr.into_raw();
-                    unsafe {
-                        *out_json = ptr;
-                        *out_len = len;
-                    }
-                    PAGE_OK
-                }
-                Err(_) => PAGE_ERR_JS,
-            }
+            unsafe { write_string_out(json, out_json, out_len) }
         }
         Err(e) => error_code(&e),
     }
@@ -976,18 +908,7 @@ pub unsafe extern "C" fn page_element_text(
         Err(_) => return PAGE_ERR_JS,
     };
     match page.element_text(sel) {
-        Ok(text) => match std::ffi::CString::new(text) {
-            Ok(cstr) => {
-                let len = cstr.as_bytes().len();
-                let ptr = cstr.into_raw();
-                unsafe {
-                    *out_text = ptr;
-                    *out_len = len;
-                }
-                PAGE_OK
-            }
-            Err(_) => PAGE_ERR_JS,
-        },
+        Ok(text) => unsafe { write_string_out(text, out_text, out_len) },
         Err(e) => error_code(&e),
     }
 }
@@ -1025,18 +946,7 @@ pub unsafe extern "C" fn page_element_attribute(
     match page.element_attribute(sel, attr) {
         Ok(value) => {
             let s = value.unwrap_or_default();
-            match std::ffi::CString::new(s) {
-                Ok(cstr) => {
-                    let len = cstr.as_bytes().len();
-                    let ptr = cstr.into_raw();
-                    unsafe {
-                        *out_value = ptr;
-                        *out_len = len;
-                    }
-                    PAGE_OK
-                }
-                Err(_) => PAGE_ERR_JS,
-            }
+            unsafe { write_string_out(s, out_value, out_len) }
         }
         Err(e) => error_code(&e),
     }
@@ -1063,18 +973,7 @@ pub unsafe extern "C" fn page_element_html(
         Err(_) => return PAGE_ERR_JS,
     };
     match page.element_html(sel) {
-        Ok(html) => match std::ffi::CString::new(html) {
-            Ok(cstr) => {
-                let len = cstr.as_bytes().len();
-                let ptr = cstr.into_raw();
-                unsafe {
-                    *out_html = ptr;
-                    *out_len = len;
-                }
-                PAGE_OK
-            }
-            Err(_) => PAGE_ERR_JS,
-        },
+        Ok(html) => unsafe { write_string_out(html, out_html, out_len) },
         Err(e) => error_code(&e),
     }
 }
@@ -1201,18 +1100,7 @@ pub unsafe extern "C" fn page_page_ids(
     let page = unsafe { &*page };
     let ids = page.page_ids();
     let json = serde_json::to_string(&ids).unwrap_or_else(|_| "[]".to_string());
-    match std::ffi::CString::new(json) {
-        Ok(cstr) => {
-            let len = cstr.as_bytes().len();
-            let ptr = cstr.into_raw();
-            unsafe {
-                *out_json = ptr;
-                *out_len = len;
-            }
-            PAGE_OK
-        }
-        Err(_) => PAGE_ERR_JS,
-    }
+    unsafe { write_string_out(json, out_json, out_len) }
 }
 
 /// Get the number of open pages.
@@ -1263,18 +1151,7 @@ pub unsafe extern "C" fn page_popup_pages(
     let page = unsafe { &*page };
     let ids = page.popup_pages();
     let json = serde_json::to_string(&ids).unwrap_or_else(|_| "[]".to_string());
-    match std::ffi::CString::new(json) {
-        Ok(cstr) => {
-            let len = cstr.as_bytes().len();
-            let ptr = cstr.into_raw();
-            unsafe {
-                *out_json = ptr;
-                *out_len = len;
-            }
-            PAGE_OK
-        }
-        Err(_) => PAGE_ERR_JS,
-    }
+    unsafe { write_string_out(json, out_json, out_len) }
 }
 
 /// Get the URL of a specific page by ID.
@@ -1295,18 +1172,7 @@ pub unsafe extern "C" fn page_page_url(
     }
     let page = unsafe { &*page };
     match page.page_url(page_id) {
-        Some(url_str) => match std::ffi::CString::new(url_str) {
-            Ok(cstr) => {
-                let len = cstr.as_bytes().len();
-                let ptr = cstr.into_raw();
-                unsafe {
-                    *out_url = ptr;
-                    *out_len = len;
-                }
-                PAGE_OK
-            }
-            Err(_) => PAGE_ERR_JS,
-        },
+        Some(url_str) => unsafe { write_string_out(url_str, out_url, out_len) },
         None => PAGE_ERR_NO_PAGE,
     }
 }
@@ -1329,18 +1195,7 @@ pub unsafe extern "C" fn page_page_title(
     }
     let page = unsafe { &*page };
     match page.page_title(page_id) {
-        Some(title_str) => match std::ffi::CString::new(title_str) {
-            Ok(cstr) => {
-                let len = cstr.as_bytes().len();
-                let ptr = cstr.into_raw();
-                unsafe {
-                    *out_title = ptr;
-                    *out_len = len;
-                }
-                PAGE_OK
-            }
-            Err(_) => PAGE_ERR_JS,
-        },
+        Some(title_str) => unsafe { write_string_out(title_str, out_title, out_len) },
         None => PAGE_ERR_NO_PAGE,
     }
 }
