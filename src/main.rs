@@ -18,7 +18,6 @@ use std::process;
 
 use bpaf::Bpaf;
 use image::ImageFormat;
-use log::error;
 use servo_scraper::{PageEngine, PageOptions};
 use url::Url;
 
@@ -212,24 +211,22 @@ fn main() {
                 let format = ImageFormat::from_path(path).unwrap_or(ImageFormat::Png);
                 if format == ImageFormat::Png {
                     if let Err(e) = std::fs::write(path, &png_bytes) {
-                        error!("Failed to save screenshot to {path}: {e}");
                         eprintln!("Error: failed to save screenshot: {e}");
-                    } else {
-                        eprintln!("Screenshot saved to {path}");
+                        process::exit(1);
                     }
+                    eprintln!("Screenshot saved to {path}");
                 } else {
                     match image::load_from_memory(&png_bytes) {
                         Ok(img) => {
                             if let Err(e) = img.save_with_format(path, format) {
-                                error!("Failed to save screenshot to {path}: {e}");
                                 eprintln!("Error: failed to save screenshot: {e}");
-                            } else {
-                                eprintln!("Screenshot saved to {path}");
+                                process::exit(1);
                             }
+                            eprintln!("Screenshot saved to {path}");
                         }
                         Err(e) => {
-                            error!("Failed to decode PNG for re-encoding: {e}");
                             eprintln!("Error: failed to decode screenshot: {e}");
+                            process::exit(1);
                         }
                     }
                 }
@@ -246,11 +243,10 @@ fn main() {
         match engine.html() {
             Ok(html) => {
                 if let Err(e) = std::fs::write(path, &html) {
-                    error!("Failed to write HTML to {path}: {e}");
                     eprintln!("Error: failed to write HTML: {e}");
-                } else {
-                    eprintln!("HTML saved to {path} ({} bytes)", html.len());
+                    process::exit(1);
                 }
+                eprintln!("HTML saved to {path} ({} bytes)", html.len());
             }
             Err(e) => {
                 eprintln!("Error: HTML capture failed: {e}");

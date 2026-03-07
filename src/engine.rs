@@ -552,7 +552,13 @@ fn jsvalue_to_json(value: &JSValue) -> String {
         JSValue::Undefined => "undefined".to_string(),
         JSValue::Null => "null".to_string(),
         JSValue::Boolean(b) => serde_json::to_string(b).unwrap(),
-        JSValue::Number(n) => serde_json::to_string(n).unwrap(),
+        JSValue::Number(n) => {
+            if n.is_finite() {
+                serde_json::to_string(n).unwrap()
+            } else {
+                "null".to_string()
+            }
+        }
         JSValue::String(s) => serde_json::to_string(s).unwrap(),
         JSValue::Array(arr) => {
             let items: Vec<String> = arr.iter().map(jsvalue_to_json).collect();
@@ -582,7 +588,7 @@ fn jsvalue_to_json(value: &JSValue) -> String {
 /// Produce a properly escaped, double-quoted JS string literal using serde_json.
 /// Handles backslashes, quotes, newlines, tabs, null bytes, and all Unicode control chars.
 fn js_string_literal(s: &str) -> String {
-    serde_json::to_string(s).unwrap_or_else(|_| format!("\"{}\"", s))
+    serde_json::to_string(s).expect("serde_json::to_string on &str cannot fail")
 }
 
 /// Map a key name string to a `Key`.

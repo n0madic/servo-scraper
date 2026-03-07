@@ -1354,7 +1354,7 @@ pub unsafe extern "C" fn page_page_title(
 /// `data` must be a pointer returned by a page screenshot function, or NULL.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn page_buffer_free(data: *mut u8, len: usize) {
-    if !data.is_null() && len > 0 {
+    if !data.is_null() {
         unsafe {
             let slice = std::slice::from_raw_parts_mut(data, len);
             drop(Box::from_raw(slice));
