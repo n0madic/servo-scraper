@@ -38,27 +38,37 @@ test-c: build-lib
 		-L$(RELEASE_DIR) -lservo_scraper
 	@echo "Built: $(RELEASE_DIR)/test_scraper"
 
+# Detect shared library extension based on platform
+UNAME_S := $(shell uname -s)
+ifeq ($(UNAME_S),Darwin)
+  DYLIB_EXT = dylib
+else ifeq ($(UNAME_S),Linux)
+  DYLIB_EXT = so
+else
+  DYLIB_EXT = dylib
+endif
+
 # Verify the Python example can load the shared library
 test-python: build-lib
 	python3 -c "\
 		import ctypes, sys; \
-		lib = ctypes.CDLL('$(RELEASE_DIR)/libservo_scraper.dylib'); \
+		lib = ctypes.CDLL('$(RELEASE_DIR)/libservo_scraper.$(DYLIB_EXT)'); \
 		assert lib.page_new, 'page_new not found'; \
 		assert lib.page_free, 'page_free not found'; \
 		assert lib.page_open, 'page_open not found'; \
 		assert lib.page_screenshot, 'page_screenshot not found'; \
 		assert lib.page_html, 'page_html not found'; \
 		assert lib.page_evaluate, 'page_evaluate not found'; \
-		print('Python: loaded libservo_scraper.dylib, all FFI symbols found')"
+		print('Python: loaded libservo_scraper.$(DYLIB_EXT), all FFI symbols found')"
 
 # Install JS dependencies and verify the library can be loaded
 test-js: build-lib
 	cd examples/js && npm install --silent
 	NODE_PATH=examples/js/node_modules node -e "\
 		const koffi = require('koffi'); \
-		const lib = koffi.load('$(RELEASE_DIR)/libservo_scraper.dylib'); \
+		const lib = koffi.load('$(RELEASE_DIR)/libservo_scraper.$(DYLIB_EXT)'); \
 		const f = lib.func('void *page_new(uint32_t, uint32_t, uint64_t, double, int)'); \
-		console.log('Node.js: loaded libservo_scraper.dylib via koffi, FFI binding OK');"
+		console.log('Node.js: loaded libservo_scraper.$(DYLIB_EXT) via koffi, FFI binding OK');"
 
 # Build the Go example against the shared library
 test-go: build-lib
