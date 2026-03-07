@@ -810,10 +810,21 @@ impl PageEngine {
     }
 
     /// Take a full-page screenshot (PNG bytes).
+    ///
+    /// The viewport is temporarily resized to the document's full scroll height
+    /// (capped at `MAX_FULLPAGE_HEIGHT` to avoid GPU texture limits), then restored.
     pub fn screenshot_fullpage(&self) -> Result<Vec<u8>, PageError> {
+        // GPU backends (CGL/EGL) have a max texture dimension, typically 16384.
+        // Exceeding it causes a panic in surfman. Cap to a safe maximum.
+        const MAX_FULLPAGE_HEIGHT: u32 = 16384;
+
         let webview = self.webview()?;
         let page = self.active_page()?;
+        let original_height = page.height;
         let js = "Math.max(document.documentElement.scrollHeight, document.body.scrollHeight)";
+
+        let needs_restore;
+
         if let Ok(JSValue::Number(doc_height)) = eval_js(
             &self.servo,
             &self.event_loop,
@@ -821,8 +832,9 @@ impl PageEngine {
             js,
             self.options.timeout,
         ) {
-            let mut doc_height = doc_height as u32;
-            if doc_height > page.height {
+            let mut doc_height = (doc_height as u32).min(MAX_FULLPAGE_HEIGHT);
+            if doc_height > original_height {
+                needs_restore = true;
                 let new_size = PhysicalSize::new(page.width, doc_height);
                 webview.resize(new_size);
                 let got_frame = wait_for_frame(
@@ -832,6 +844,14 @@ impl PageEngine {
                     Duration::from_secs(self.options.timeout),
                 );
                 if !got_frame {
+                    // Restore before returning error.
+                    webview.resize(PhysicalSize::new(page.width, original_height));
+                    let _ = wait_for_frame(
+                        &self.servo,
+                        &self.event_loop,
+                        &page.delegate,
+                        Duration::from_secs(self.options.timeout),
+                    );
                     return Err(PageError::ScreenshotFailed(
                         "timed out waiting for repaint after resize".to_string(),
                     ));
@@ -854,8 +874,8 @@ impl PageEngine {
                     js,
                     self.options.timeout,
                 ) {
-                    let new_height = new_height as u32;
-                    if new_height != doc_height && new_height > page.height {
+                    let new_height = (new_height as u32).min(MAX_FULLPAGE_HEIGHT);
+                    if new_height != doc_height && new_height > original_height {
                         doc_height = new_height;
                         webview.resize(PhysicalSize::new(page.width, doc_height));
                         wait_for_frame(
@@ -873,9 +893,28 @@ impl PageEngine {
                         );
                     }
                 }
+            } else {
+                needs_restore = false;
             }
+        } else {
+            needs_restore = false;
         }
-        take_screenshot_bytes(&self.servo, &self.event_loop, webview, self.options.timeout)
+
+        let result =
+            take_screenshot_bytes(&self.servo, &self.event_loop, webview, self.options.timeout);
+
+        // Restore original viewport height.
+        if needs_restore {
+            webview.resize(PhysicalSize::new(page.width, original_height));
+            let _ = wait_for_frame(
+                &self.servo,
+                &self.event_loop,
+                &page.delegate,
+                Duration::from_secs(self.options.timeout),
+            );
+        }
+
+        result
     }
 
     /// Capture the page's HTML.
