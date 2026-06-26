@@ -8,7 +8,6 @@ use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 #[cfg(unix)]
 use std::os::fd::{AsRawFd, IntoRawFd};
-use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
@@ -16,7 +15,6 @@ use std::time::{Duration, Instant};
 use dpi::PhysicalSize;
 use image::codecs::png::PngEncoder;
 use image::{DynamicImage, ImageEncoder};
-use servo::resources::{self, Resource, ResourceReaderMethods};
 use servo::{
     ConsoleLogLevel, CreateNewWebViewRequest, DevicePoint, EmbedderControl, EventLoopWaker,
     InputEvent, JSValue, Key, KeyState, KeyboardEvent, LoadStatus, MouseButton, MouseButtonAction,
@@ -110,45 +108,6 @@ fn with_stderr_suppressed<T>(f: impl FnOnce() -> T) -> T {
         }
     }
     f()
-}
-
-// ---------------------------------------------------------------------------
-// Internal: Embedded resources
-// ---------------------------------------------------------------------------
-
-struct EmbeddedResourceReader;
-
-impl ResourceReaderMethods for EmbeddedResourceReader {
-    fn read(&self, res: Resource) -> Vec<u8> {
-        match res {
-            Resource::BluetoothBlocklist => {
-                include_bytes!("../servo/resources/gatt_blocklist.txt").to_vec()
-            }
-            Resource::DomainList => {
-                include_bytes!("../servo/resources/public_domains.txt").to_vec()
-            }
-            Resource::HstsPreloadList => {
-                include_bytes!("../servo/resources/hsts_preload.fstmap").to_vec()
-            }
-            Resource::BadCertHTML => include_bytes!("../servo/resources/badcert.html").to_vec(),
-            Resource::NetErrorHTML => include_bytes!("../servo/resources/neterror.html").to_vec(),
-            Resource::BrokenImageIcon => include_bytes!("../servo/resources/rippy.png").to_vec(),
-            Resource::CrashHTML => include_bytes!("../servo/resources/crash.html").to_vec(),
-            Resource::DirectoryListingHTML => {
-                include_bytes!("../servo/resources/directory-listing.html").to_vec()
-            }
-            Resource::AboutMemoryHTML => {
-                include_bytes!("../servo/resources/about-memory.html").to_vec()
-            }
-            Resource::DebuggerJS => include_bytes!("../servo/resources/debugger.js").to_vec(),
-        }
-    }
-    fn sandbox_access_files(&self) -> Vec<PathBuf> {
-        vec![]
-    }
-    fn sandbox_access_files_dirs(&self) -> Vec<PathBuf> {
-        vec![]
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -388,6 +347,7 @@ impl WebViewDelegate for PageDelegate {
             ConsoleLogLevel::Warn => "warn",
             ConsoleLogLevel::Error => "error",
             ConsoleLogLevel::Trace => "trace",
+            ConsoleLogLevel::Dir => "dir",
         };
         self.console_messages.borrow_mut().push(ConsoleMessage {
             level: level_str.to_string(),
@@ -673,8 +633,6 @@ pub struct PageEngine {
 impl PageEngine {
     /// Create a new page engine with the given options.
     pub fn new(options: PageOptions) -> Result<Self, PageError> {
-        resources::set(Box::new(EmbeddedResourceReader));
-
         rustls::crypto::aws_lc_rs::default_provider()
             .install_default()
             .ok();

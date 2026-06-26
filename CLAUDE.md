@@ -176,10 +176,10 @@ Three architectural layers (dependency graph: `types ← engine ← page ← ffi
 
 ## Dependencies
 
-- **Servo** is included as a git submodule at `./servo` and consumed via `libservo` (path dependency).
+- **Servo** is included as a git submodule at `./servo` and consumed via `servo` (path dependency).
 - **serde** + **serde_json** for JSON serialization (console messages, network requests, JS results).
 - **base64** for encoding file data in `set_input_files()`.
-- Requires Rust 1.86+ (edition 2024).
+- Requires Rust 1.88+ (edition 2024).
 - Release profile: LTO enabled, single codegen unit, `opt-level = "z"`, stripped, `panic = "abort"`.
 
 ## FFI Examples

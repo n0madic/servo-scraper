@@ -32,7 +32,7 @@ Available as a **CLI tool** and a **library** with FFI bindings for C, Python, J
 
 ## Prerequisites
 
-- Rust 1.86+
+- Rust 1.88+
 - System dependencies required by Servo (see [Servo build instructions](https://book.servo.org/building/building.html))
 
 ## Build
