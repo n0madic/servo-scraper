@@ -38,10 +38,12 @@ Available as a **CLI tool** and a **library** with FFI bindings for C, Python, J
 ## Build
 
 ```bash
-git clone --recurse-submodules https://github.com/user/servo-scraper.git
+git clone https://github.com/user/servo-scraper.git
 cd servo-scraper
 make
 ```
+
+Servo is pulled from crates.io as a regular dependency — no submodule checkout required.
 
 ### Build Targets
 
@@ -325,9 +327,11 @@ The library has three layers:
 
 ## Updating Servo
 
+Servo is a crates.io dependency. Bump the version in `Cargo.toml` (Servo ships monthly releases plus an LTS line), then:
+
 ```bash
-make update-servo
-git commit -m "Update servo submodule"
+cargo update -p servo
+git commit -am "Update servo to <version>"
 ```
 
 ## License

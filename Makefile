@@ -11,7 +11,7 @@ TARGET_MACOS_ARM64 = aarch64-apple-darwin
 TARGET_MACOS_X86_64 = x86_64-apple-darwin
 TARGET_LINUX_X86_64 = x86_64-unknown-linux-gnu
 
-.PHONY: build build-cli build-lib test test-c test-python test-js test-go clean update-servo \
+.PHONY: build build-cli build-lib test test-c test-python test-js test-go clean \
 	release-macos-arm64 release-macos-x86_64 release-linux-x86_64 release-all release
 
 # Build everything (CLI binary + shared/static libraries)
@@ -79,13 +79,6 @@ test-go: build-lib
 clean:
 	cargo clean
 	rm -rf $(DIST_DIR)
-
-# Update the Servo submodule to the latest main branch commit
-update-servo:
-	git -C servo fetch origin
-	git -C servo checkout origin/main
-	git add servo
-	@echo "Servo updated to $$(git -C servo rev-parse --short HEAD). Don't forget to commit."
 
 # ---------------------------------------------------------------------------
 # Release packaging

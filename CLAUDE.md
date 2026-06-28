@@ -13,8 +13,9 @@ make build          # Build everything (CLI binary + shared/static libraries)
 make build-cli      # Build only the CLI binary
 make build-lib      # Build only the library (rlib + cdylib + staticlib)
 make clean          # Clean build artifacts + dist/
-make update-servo   # Update Servo submodule to latest main
 ```
+
+Servo is a regular crates.io dependency (`servo = "0.3.0"`). To update it, bump the version in `Cargo.toml` and run `cargo update -p servo`.
 
 All builds use `cargo build --release`. There is no debug build target in the Makefile.
 
@@ -139,7 +140,7 @@ Three architectural layers (dependency graph: `types ← engine ← page ← ffi
 - **Element info** methods use JS `querySelector` + `getBoundingClientRect`/`textContent`/`getAttribute`/`outerHTML`.
 - **Navigation** uses native `WebView::reload()`, `go_back(1)`, `go_forward(1)` with `can_go_back()`/`can_go_forward()` checks.
 - **Servo runs headless** using `SoftwareRenderingContext` — no GPU or display server needed.
-- **Resources are embedded** via `include_bytes!()` from `servo/resources/` — the binary is self-contained.
+- **Resources are embedded** via Servo's `baked-in-resources` feature (the `servo-default-resources` crate) — the binary is self-contained, no external resource directory needed.
 - **Stderr is suppressed** during Servo rendering via fd-level `dup2` to `/dev/null` (to hide macOS OpenGL noise).
 - **Event loop** uses a condvar-based sleep/wake pattern with 5ms poll intervals.
 - **Full-page screenshots** work by evaluating JS to get `scrollHeight`, then resizing the rendering context and viewport.
@@ -176,7 +177,7 @@ Three architectural layers (dependency graph: `types ← engine ← page ← ffi
 
 ## Dependencies
 
-- **Servo** is included as a git submodule at `./servo` and consumed via `servo` (path dependency).
+- **Servo** is a crates.io dependency (`servo = "0.3.0"`, features `baked-in-resources` + `js_jit`, `default-features = false`). Servo publishes monthly releases plus an LTS line; bump the version in `Cargo.toml` to update.
 - **serde** + **serde_json** for JSON serialization (console messages, network requests, JS results).
 - **base64** for encoding file data in `set_input_files()`.
 - Requires Rust 1.88+ (edition 2024).

@@ -347,7 +347,6 @@ impl WebViewDelegate for PageDelegate {
             ConsoleLogLevel::Warn => "warn",
             ConsoleLogLevel::Error => "error",
             ConsoleLogLevel::Trace => "trace",
-            ConsoleLogLevel::Dir => "dir",
         };
         self.console_messages.borrow_mut().push(ConsoleMessage {
             level: level_str.to_string(),
