@@ -15,8 +15,11 @@ Available as a **CLI tool** and a **library** with FFI bindings for C, Python, J
 - **Scroll** — native wheel events or `scrollIntoView()` by CSS selector
 - **Select** — programmatic `<select>` dropdown manipulation with change event
 - **File upload** — inject files into `<input type="file">` via DataTransfer API
-- **Cookies** — get, set, and clear cookies via `document.cookie`
-- **Request interception** — block URLs matching patterns (images, trackers, etc.)
+- **Cookies** — get, set, and clear cookies via Servo's native cookie store (includes `HttpOnly` cookies)
+- **Request interception** — block URLs matching patterns, or by resource type (image, font, script, stylesheet, media, ...)
+- **Custom HTTP headers** — send extra headers on navigation (Authorization, Referer, etc.)
+- **Init scripts / stylesheets** — inject JavaScript and CSS into every page before its scripts run
+- **Clean sessions** — opt-in temporary (in-memory) storage so cookies/storage don't persist
 - **Navigation** — reload, go back, go forward in history
 - **Element info** — get bounding rect, text content, attributes, and HTML of elements
 - **Custom User-Agent** — set via `PageOptions` or `--user-agent` CLI flag
@@ -56,7 +59,7 @@ Servo is pulled from crates.io as a regular dependency — no submodule checkout
 | Python smoke test | `make test-python` | verifies FFI symbols |
 | JS smoke test | `make test-js` | verifies koffi binding |
 | Go example | `make test-go` | `target/release/go_scraper` |
-| Integration tests | `cargo test` | 87 tests, ~60-100s |
+| Integration tests | `cargo test` | 93 tests, ~60-120s |
 
 ### Build Artifacts
 
@@ -97,6 +100,18 @@ servo-scraper --wait-for-network-idle 500 --screenshot page.png https://example.
 # Block images and tracking pixels
 servo-scraper --block-urls ".png,.jpg,.gif,.svg,.tracker" --screenshot page.png https://example.com
 
+# Block whole resource categories (repeatable)
+servo-scraper --block-resource-type image --block-resource-type font --screenshot page.png https://example.com
+
+# Send custom HTTP headers on navigation (repeatable)
+servo-scraper --header "Authorization: Bearer TOKEN" --eval "document.body.innerText" https://example.com
+
+# Inject an init script and a user stylesheet
+servo-scraper --init-script inject.js --init-style theme.css --screenshot page.png https://example.com
+
+# Clean per-run session (in-memory storage, nothing persists to disk)
+servo-scraper --temporary-storage --screenshot page.png https://example.com
+
 # Combined
 servo-scraper --eval "document.title" --screenshot page.png --html page.html --width 1920 --height 1080 https://example.com
 ```
@@ -114,6 +129,11 @@ servo-scraper --eval "document.title" --screenshot page.png --html page.html --w
 | `--user-agent <STRING>` | Custom User-Agent string | Servo default |
 | `--wait-for-network-idle <MS>` | Wait for network idle (no new requests for N ms) | — |
 | `--block-urls <PATTERNS>` | Comma-separated URL patterns to block | — |
+| `--block-resource-type <TYPE>` | Block a resource category (image, font, script, stylesheet, media, document, ...); repeatable | — |
+| `--header <HEADER>` | Extra navigation header, `"Name: Value"`; repeatable | — |
+| `--init-script <PATH>` | Inject a JS file into every page; repeatable | — |
+| `--init-style <PATH>` | Inject a CSS file as a user stylesheet; repeatable | — |
+| `--temporary-storage` | Use in-memory storage (clean per-run session) | off |
 | `--width <PX>` | Viewport width | 1280 |
 | `--height <PX>` | Viewport height | 720 |
 | `--timeout <SEC>` | Max page load wait | 30 |
@@ -131,15 +151,23 @@ let options = PageOptions {
 };
 let mut engine = PageEngine::new(options).unwrap();
 
-// Block tracking/ad resources
+// Block tracking/ad resources by URL pattern or by resource type
 engine.block_urls(vec![".tracker".into(), "ads.".into()]);
+engine.block_resource_type_names(&["image".into(), "font".into()]);
+
+// Send custom HTTP headers on navigation
+engine.set_headers(vec![("Authorization".into(), "Bearer TOKEN".into())]);
+
+// Inject JS/CSS into every page (takes effect on next load)
+engine.add_init_script("window.__scraped = true;".into());
+engine.add_init_stylesheet("img { display: none }".into());
 
 engine.open("https://example.com").unwrap();
 let title = engine.evaluate("document.title").unwrap();  // JSON string
 let html = engine.html().unwrap();
 let png = engine.screenshot().unwrap();
 
-// Cookies
+// Cookies — native cookie store, includes HttpOnly cookies
 let cookies = engine.get_cookies().unwrap();
 engine.set_cookie("name=value; path=/").unwrap();
 
@@ -217,7 +245,7 @@ All functions are prefixed with `page_`. See [`examples/c/servo_scraper.h`](exam
 
 ```c
 // Lifecycle
-ServoPage *page_new(width, height, timeout, wait, fullpage, user_agent);
+ServoPage *page_new(width, height, timeout, wait, fullpage, user_agent, temporary_storage);
 void       page_free(ServoPage *page);
 int        page_reset(page);
 
@@ -237,13 +265,19 @@ int page_html(page, &out_html, &out_len);
 int page_url(page, &out_url, &out_len);
 int page_title(page, &out_title, &out_len);
 
-// Cookies
+// Cookies (native store, includes HttpOnly)
 int page_get_cookies(page, &out_cookies, &out_len);
 int page_set_cookie(page, cookie);
 int page_clear_cookies(page);
 
 // Request interception
-int page_block_urls(page, patterns);  // comma-separated, NULL = clear
+int page_block_urls(page, patterns);            // comma-separated, NULL = clear
+int page_block_resource_types(page, types);     // "image,font", NULL = clear
+
+// Navigation headers / user content
+int page_set_headers(page, headers);            // "Name: Value\nName2: Value2", NULL = clear
+int page_add_init_script(page, script);         // JS injected before page scripts
+int page_add_init_stylesheet(page, css);        // CSS user stylesheet
 
 // Element info
 int page_element_rect(page, selector, &out_json, &out_len);

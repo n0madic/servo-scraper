@@ -27,6 +27,12 @@ url = "2.5"
 log = "0.4"
 libc = "0.2"
 base64 = "0.22"
+cookie = "0.18"
+http = "1.4"
+content-security-policy = { version = "0.8.0", features = ["serde"] }
+
+[dev-dependencies]
+tiny_http = "0.12"
 
 [profile.release]
 lto = true

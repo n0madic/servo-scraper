@@ -12,14 +12,19 @@ use std::rc::Rc;
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
 
+use content_security_policy::Destination;
+use cookie::Cookie;
 use dpi::PhysicalSize;
+use http::{HeaderMap, HeaderName, HeaderValue};
 use image::codecs::png::PngEncoder;
 use image::{DynamicImage, ImageEncoder};
+use servo::user_contents::UserStyleSheet;
 use servo::{
-    ConsoleLogLevel, CreateNewWebViewRequest, DevicePoint, EmbedderControl, EventLoopWaker,
-    InputEvent, JSValue, Key, KeyState, KeyboardEvent, LoadStatus, MouseButton, MouseButtonAction,
-    MouseButtonEvent, MouseMoveEvent, NamedKey, Preferences, RenderingContext, Servo, ServoBuilder,
-    SimpleDialog, SoftwareRenderingContext, WebResourceLoad, WebResourceResponse, WebView,
+    ConsoleLogLevel, CookieSource, CreateNewWebViewRequest, DevicePoint, EmbedderControl,
+    EventLoopWaker, InputEvent, JSValue, Key, KeyState, KeyboardEvent, LoadStatus, MouseButton,
+    MouseButtonAction, MouseButtonEvent, MouseMoveEvent, NamedKey, Opts, Preferences,
+    RenderingContext, Servo, ServoBuilder, SimpleDialog, SoftwareRenderingContext, TraversalId,
+    UrlRequest, UserContentManager, UserScript, WebResourceLoad, WebResourceResponse, WebView,
     WebViewBuilder, WebViewDelegate, WebViewPoint, WheelDelta, WheelEvent, WheelMode,
 };
 use url::Url;
@@ -292,11 +297,13 @@ struct PendingPopup {
 
 struct PageDelegate {
     load_complete: Cell<bool>,
+    traversal_complete: Cell<bool>,
     frame_count: Cell<u64>,
     last_request_time: Cell<Option<Instant>>,
     console_messages: RefCell<Vec<ConsoleMessage>>,
     network_requests: RefCell<Vec<NetworkRequest>>,
     blocked_url_patterns: RefCell<Vec<String>>,
+    blocked_destinations: RefCell<Vec<Destination>>,
     closed: Cell<bool>,
     popup_buffer: Rc<RefCell<Vec<PendingPopup>>>,
     popup_enabled: Rc<Cell<bool>>,
@@ -313,11 +320,13 @@ impl PageDelegate {
     ) -> Self {
         Self {
             load_complete: Cell::new(false),
+            traversal_complete: Cell::new(false),
             frame_count: Cell::new(0),
             last_request_time: Cell::new(None),
             console_messages: RefCell::new(Vec::new()),
             network_requests: RefCell::new(Vec::new()),
             blocked_url_patterns: RefCell::new(Vec::new()),
+            blocked_destinations: RefCell::new(Vec::new()),
             closed: Cell::new(false),
             popup_buffer,
             popup_enabled,
@@ -332,6 +341,13 @@ impl WebViewDelegate for PageDelegate {
         if status == LoadStatus::Complete {
             self.load_complete.set(true);
         }
+    }
+
+    fn notify_traversal_complete(&self, _webview: WebView, _traversal_id: TraversalId) {
+        // History traversal (go_back/go_forward) finished. For some loads
+        // (notably `data:` URIs) Servo does not re-fire `LoadStatus::Complete`,
+        // so this is the reliable signal that a traversal has settled.
+        self.traversal_complete.set(true);
     }
 
     fn notify_new_frame_ready(&self, webview: WebView) {
@@ -357,25 +373,35 @@ impl WebViewDelegate for PageDelegate {
     fn load_web_resource(&self, _webview: WebView, load: WebResourceLoad) {
         let request = load.request();
         let url_str = request.url.to_string();
-        self.network_requests.borrow_mut().push(NetworkRequest {
-            method: request.method.to_string(),
-            url: url_str.clone(),
-            is_main_frame: request.is_for_main_frame,
-        });
+        // Track every request start (including blocked ones) so network-idle
+        // detection still observes the request cascade settling.
         self.last_request_time.set(Some(Instant::now()));
 
-        // Check if URL matches any blocked pattern.
+        // A request is blocked if its URL matches a substring pattern or its
+        // destination (image, font, script, ...) is in the blocked set.
         let blocked = self
             .blocked_url_patterns
             .borrow()
             .iter()
-            .any(|pattern| url_str.contains(pattern));
+            .any(|pattern| url_str.contains(pattern))
+            || self
+                .blocked_destinations
+                .borrow()
+                .contains(&request.destination);
 
         if blocked {
             let response = WebResourceResponse::new(request.url.clone());
             load.intercept(response).cancel();
+            return;
         }
-        // Otherwise drop `load` to let it continue normally.
+
+        // Only record requests that are actually allowed to proceed.
+        self.network_requests.borrow_mut().push(NetworkRequest {
+            method: request.method.to_string(),
+            url: url_str,
+            is_main_frame: request.is_for_main_frame,
+        });
+        // Drop `load` to let it continue normally.
     }
 
     fn show_embedder_control(&self, _webview: WebView, embedder_control: EmbedderControl) {
@@ -597,6 +623,47 @@ fn parse_key_name(name: &str) -> Key {
     }
 }
 
+/// Synthesize a unique, well-formed URL for a user stylesheet. The URL is only
+/// used as the base for resolving relative `url()` references inside the CSS.
+fn synthetic_stylesheet_url(n: u32) -> Url {
+    Url::parse(&format!(
+        "https://servo-scraper.invalid/user-stylesheet-{n}.css"
+    ))
+    .expect("synthetic stylesheet URL is always valid")
+}
+
+/// Map a user-facing resource-type name to one or more request [`Destination`]s.
+///
+/// Unknown names map to an empty list (no-op). Recognized names mirror common
+/// devtools/Puppeteer resource categories.
+fn parse_resource_types(names: &[String]) -> Vec<Destination> {
+    let mut out = Vec::new();
+    for name in names {
+        match name.trim().to_ascii_lowercase().as_str() {
+            "" => {}
+            "image" => out.push(Destination::Image),
+            "font" => out.push(Destination::Font),
+            "script" => out.push(Destination::Script),
+            "stylesheet" | "style" | "css" => out.push(Destination::Style),
+            "media" => {
+                out.push(Destination::Audio);
+                out.push(Destination::Video);
+            }
+            "document" => out.push(Destination::Document),
+            "frame" | "iframe" => {
+                out.push(Destination::Frame);
+                out.push(Destination::IFrame);
+            }
+            "object" => out.push(Destination::Object),
+            "embed" => out.push(Destination::Embed),
+            "track" => out.push(Destination::Track),
+            "worker" => out.push(Destination::Worker),
+            _ => {}
+        }
+    }
+    out
+}
+
 // ---------------------------------------------------------------------------
 // Internal: Per-page state
 // ---------------------------------------------------------------------------
@@ -626,6 +693,12 @@ pub struct PageEngine {
     next_page_id: u32,
     popup_buffer: Rc<RefCell<Vec<PendingPopup>>>,
     popup_enabled: Rc<Cell<bool>>,
+    /// Shared across all WebViews; injects init scripts/stylesheets on load.
+    user_content_manager: Rc<UserContentManager>,
+    /// Extra HTTP headers applied to subsequent navigations.
+    headers: Vec<(String, String)>,
+    /// Counter for synthesizing unique user-stylesheet URLs.
+    next_stylesheet_id: Cell<u32>,
     options: PageOptions,
 }
 
@@ -646,8 +719,28 @@ impl PageEngine {
                 ..Default::default()
             });
         }
+        if options.temporary_storage {
+            builder = builder.opts(Opts {
+                temporary_storage: true,
+                ..Default::default()
+            });
+        }
         let servo = builder.build();
         servo.setup_logging();
+
+        // Inject configured init scripts/stylesheets via a shared UserContentManager.
+        let user_content_manager = Rc::new(UserContentManager::new(&servo));
+        for js in &options.init_scripts {
+            user_content_manager.add_script(Rc::new(UserScript::new(js.clone(), None)));
+        }
+        let mut next_stylesheet_id = 0u32;
+        for css in &options.init_stylesheets {
+            let url = synthetic_stylesheet_url(next_stylesheet_id);
+            next_stylesheet_id += 1;
+            user_content_manager.add_stylesheet(Rc::new(UserStyleSheet::new(css.clone(), url)));
+        }
+
+        let headers = options.headers.clone();
 
         Ok(Self {
             servo,
@@ -657,8 +750,29 @@ impl PageEngine {
             next_page_id: 0,
             popup_buffer: Rc::new(RefCell::new(Vec::new())),
             popup_enabled: Rc::new(Cell::new(false)),
+            user_content_manager,
+            headers,
+            next_stylesheet_id: Cell::new(next_stylesheet_id),
             options,
         })
+    }
+
+    /// Build an `http::HeaderMap` from the configured navigation headers.
+    /// Returns `None` when no valid headers are set.
+    fn build_header_map(&self) -> Option<HeaderMap> {
+        if self.headers.is_empty() {
+            return None;
+        }
+        let mut map = HeaderMap::new();
+        for (name, value) in &self.headers {
+            if let (Ok(n), Ok(v)) = (
+                HeaderName::from_bytes(name.as_bytes()),
+                HeaderValue::from_str(value),
+            ) {
+                map.append(n, v);
+            }
+        }
+        if map.is_empty() { None } else { Some(map) }
     }
 
     // -- Active-page helpers --
@@ -759,21 +873,74 @@ impl PageEngine {
             self.active_page_id = Some(id);
         }
 
-        let page = self
-            .pages
-            .get_mut(&self.active_page_id.ok_or(PageError::NoPage)?)
-            .ok_or(PageError::NoPage)?;
+        // Compute navigation headers and clone the UCM handle *before* borrowing
+        // the page mutably (both touch `&self`).
+        let headers = self.build_header_map();
+        let ucm = self.user_content_manager.clone();
+        let id = self.active_page_id.ok_or(PageError::NoPage)?;
 
-        page.delegate.load_complete.set(false);
+        // When headers are set we must navigate via `load_request`, which needs
+        // an existing WebView. A freshly-built WebView first loads `about:blank`
+        // (and fires `LoadStatus::Complete`); if we navigated immediately, that
+        // blank completion would race the real load. So in that one case we
+        // settle the blank load first, then navigate.
+        let mut settle_blank_then_navigate = false;
+        {
+            let page = self.pages.get_mut(&id).ok_or(PageError::NoPage)?;
+            page.delegate.load_complete.set(false);
 
-        if let Some(ref webview) = page.webview {
-            webview.load(parsed_url);
-        } else {
-            let webview = WebViewBuilder::new(&self.servo, page.rendering_context.clone())
-                .delegate(page.delegate.clone())
-                .url(parsed_url)
-                .build();
-            page.webview = Some(webview);
+            match (page.webview.is_some(), &headers) {
+                (true, Some(h)) => {
+                    page.webview
+                        .as_ref()
+                        .unwrap()
+                        .load_request(UrlRequest::new(parsed_url.clone()).headers(h.clone()));
+                }
+                (true, None) => {
+                    page.webview.as_ref().unwrap().load(parsed_url.clone());
+                }
+                (false, None) => {
+                    let webview = WebViewBuilder::new(&self.servo, page.rendering_context.clone())
+                        .delegate(page.delegate.clone())
+                        .user_content_manager(ucm)
+                        .url(parsed_url.clone())
+                        .build();
+                    page.webview = Some(webview);
+                }
+                (false, Some(_)) => {
+                    let webview = WebViewBuilder::new(&self.servo, page.rendering_context.clone())
+                        .delegate(page.delegate.clone())
+                        .user_content_manager(ucm)
+                        .build();
+                    page.webview = Some(webview);
+                    settle_blank_then_navigate = true;
+                }
+            }
+        }
+
+        if settle_blank_then_navigate {
+            // Wait only for the about:blank load to complete (no idle settle
+            // needed for a blank page), then navigate for real with headers.
+            let blank_delegate = self.active_page()?.delegate.clone();
+            let bd = blank_delegate.clone();
+            let blank_done = with_stderr_suppressed(|| {
+                spin_until(
+                    &self.servo,
+                    &self.event_loop,
+                    move || bd.load_complete.get(),
+                    self.options.timeout,
+                )
+            });
+            if !blank_done {
+                return Err(PageError::Timeout);
+            }
+            let h = headers.expect("blank-then-headers path implies headers are set");
+            let page = self.pages.get_mut(&id).ok_or(PageError::NoPage)?;
+            page.delegate.load_complete.set(false);
+            page.webview
+                .as_ref()
+                .ok_or(PageError::NoPage)?
+                .load_request(UrlRequest::new(parsed_url).headers(h));
         }
 
         self.wait_for_load()
@@ -1382,59 +1549,47 @@ impl PageEngine {
         }
     }
 
-    // -- Cookies (JS-based) --
+    // -- Cookies (native, via SiteDataManager) --
 
-    /// Get cookies for the current page via `document.cookie`.
+    /// Get cookies for the current page using Servo's network-layer cookie store.
+    ///
+    /// Returns a `"name=value; name2=value2"` string. Unlike `document.cookie`,
+    /// this includes `HttpOnly` cookies.
     pub fn get_cookies(&self) -> Result<String, PageError> {
-        let webview = self.webview()?;
-        match eval_js(
-            &self.servo,
-            &self.event_loop,
-            webview,
-            "document.cookie",
-            self.options.timeout,
-        )? {
-            JSValue::String(s) => Ok(s),
-            other => Err(PageError::JsError(format!(
-                "unexpected cookie result: {other:?}"
-            ))),
-        }
+        let url = self.webview()?.url().ok_or(PageError::NoPage)?;
+        let cookies = self
+            .servo
+            .site_data_manager()
+            .cookies_for_url(url, CookieSource::HTTP);
+        let serialized = cookies
+            .iter()
+            .map(|c| format!("{}={}", c.name(), c.value()))
+            .collect::<Vec<_>>()
+            .join("; ");
+        Ok(serialized)
     }
 
-    /// Set a cookie via `document.cookie = '...'`.
+    /// Set a cookie for the current page's URL via the network-layer cookie store.
+    ///
+    /// Accepts a standard `Set-Cookie`-style string (e.g. `"a=1; Path=/; HttpOnly"`).
     pub fn set_cookie(&self, cookie: &str) -> Result<(), PageError> {
-        let webview = self.webview()?;
-        let escaped = js_string_literal(cookie);
-        let js = format!("document.cookie = {escaped}");
-        eval_js(
-            &self.servo,
-            &self.event_loop,
-            webview,
-            &js,
-            self.options.timeout,
-        )?;
+        let url = self.webview()?.url().ok_or(PageError::NoPage)?;
+        let parsed = Cookie::parse(cookie.to_owned())
+            .map_err(|e| PageError::JsError(format!("invalid cookie: {e}")))?
+            .into_owned();
+        // The `None` callback uses the synchronous resource-thread path, so the
+        // cookie is committed before this returns (set/get messages are ordered).
+        self.servo
+            .site_data_manager()
+            .set_cookie_for_url(url, parsed, None);
         Ok(())
     }
 
-    /// Clear all cookies by expiring each one.
+    /// Clear all cookies from the network-layer cookie store, including `HttpOnly`.
     pub fn clear_cookies(&self) -> Result<(), PageError> {
-        let webview = self.webview()?;
-        let js = r#"(function() {
-            var cookies = document.cookie.split(';');
-            for (var i = 0; i < cookies.length; i++) {
-                var name = cookies[i].split('=')[0].trim();
-                if (name) {
-                    document.cookie = name + '=;expires=Thu, 01 Jan 1970 00:00:00 GMT;path=/';
-                }
-            }
-        })()"#;
-        eval_js(
-            &self.servo,
-            &self.event_loop,
-            webview,
-            js,
-            self.options.timeout,
-        )?;
+        // Require an active page for a consistent error contract.
+        self.webview()?;
+        self.servo.site_data_manager().clear_cookies(None);
         Ok(())
     }
 
@@ -1453,6 +1608,53 @@ impl PageEngine {
         if let Ok(delegate) = self.active_delegate() {
             delegate.blocked_url_patterns.borrow_mut().clear();
         }
+    }
+
+    /// Block requests by their [`Destination`] (e.g. image, font, script).
+    /// Requires an active page. Blocked requests are cancelled and omitted from
+    /// `network_requests()`.
+    pub fn block_resource_types(&mut self, types: Vec<Destination>) {
+        if let Ok(delegate) = self.active_delegate() {
+            *delegate.blocked_destinations.borrow_mut() = types;
+        }
+    }
+
+    /// Block requests by resource-type name (`"image"`, `"font"`, `"script"`,
+    /// `"stylesheet"`, `"media"`, `"document"`, ...). Unknown names are ignored.
+    pub fn block_resource_type_names(&mut self, names: &[String]) {
+        self.block_resource_types(parse_resource_types(names));
+    }
+
+    /// Clear all blocked resource-type destinations.
+    pub fn clear_blocked_resource_types(&mut self) {
+        if let Ok(delegate) = self.active_delegate() {
+            delegate.blocked_destinations.borrow_mut().clear();
+        }
+    }
+
+    // -- Navigation headers --
+
+    /// Replace the extra HTTP headers sent on subsequent navigations.
+    pub fn set_headers(&mut self, headers: Vec<(String, String)>) {
+        self.headers = headers;
+    }
+
+    // -- User content (init scripts / stylesheets) --
+
+    /// Inject a JavaScript snippet into every page. Takes effect on the next
+    /// load or reload (Servo `UserContentManager` semantics).
+    pub fn add_init_script(&self, script: String) {
+        self.user_content_manager
+            .add_script(Rc::new(UserScript::new(script, None)));
+    }
+
+    /// Inject a CSS user stylesheet into every page. Takes effect on the next
+    /// load or reload.
+    pub fn add_init_stylesheet(&self, css: String) {
+        let n = self.next_stylesheet_id.get();
+        self.next_stylesheet_id.set(n + 1);
+        self.user_content_manager
+            .add_stylesheet(Rc::new(UserStyleSheet::new(css, synthetic_stylesheet_url(n))));
     }
 
     // -- Navigation --
@@ -1474,8 +1676,9 @@ impl PageEngine {
         }
         let delegate = self.active_delegate()?;
         delegate.load_complete.set(false);
+        delegate.traversal_complete.set(false);
         webview.go_back(1);
-        self.wait_for_load()?;
+        self.wait_for_traversal()?;
         Ok(true)
     }
 
@@ -1487,9 +1690,57 @@ impl PageEngine {
         }
         let delegate = self.active_delegate()?;
         delegate.load_complete.set(false);
+        delegate.traversal_complete.set(false);
         webview.go_forward(1);
-        self.wait_for_load()?;
+        self.wait_for_traversal()?;
         Ok(true)
+    }
+
+    /// Wait for a history traversal to settle, then let layout settle.
+    ///
+    /// Returns once either `notify_traversal_complete` or `LoadStatus::Complete`
+    /// fires. Using the traversal signal fixes hangs on `data:` URIs, where
+    /// Servo does not re-fire `LoadStatus::Complete` for history navigation.
+    fn wait_for_traversal(&self) -> Result<(), PageError> {
+        let delegate = self.active_page()?.delegate.clone();
+
+        // 1) Wait for the traversal to commit. `data:` URIs never re-fire
+        //    `LoadStatus::Complete` for history navigation, so `traversal_complete`
+        //    is the only reliable signal there.
+        let d1 = delegate.clone();
+        let committed = with_stderr_suppressed(|| {
+            spin_until(
+                &self.servo,
+                &self.event_loop,
+                move || d1.traversal_complete.get() || d1.load_complete.get(),
+                self.options.timeout,
+            )
+        });
+        if !committed {
+            return Err(PageError::Timeout);
+        }
+
+        // Note: we intentionally do NOT additionally wait for
+        // `LoadStatus::Complete` here. History traversal does not reliably
+        // re-fire it (data: URIs never do; HTTP back/forward in this headless
+        // configuration does not either), so waiting for it would reintroduce
+        // the very hang this method exists to avoid. `traversal_complete` is the
+        // authoritative "navigation committed" signal.
+
+        // Final settle so layout/paint stabilizes.
+        if self.options.wait > 0.0 {
+            with_stderr_suppressed(|| {
+                wait_for_idle(
+                    &self.servo,
+                    &self.event_loop,
+                    &delegate,
+                    Duration::from_secs_f64(self.options.wait),
+                    Duration::from_secs(self.options.timeout),
+                );
+            });
+        }
+
+        Ok(())
     }
 
     // -- Element info (JS-based) --

@@ -23,6 +23,18 @@ pub struct PageOptions {
     pub fullpage: bool,
     /// Custom User-Agent string. `None` uses Servo's default.
     pub user_agent: Option<String>,
+    /// Use temporary (in-memory) storage for a clean per-run session (default: false).
+    ///
+    /// When enabled, cookies and web storage do not persist to disk.
+    pub temporary_storage: bool,
+    /// Extra HTTP headers sent on navigation requests (`(name, value)` pairs).
+    pub headers: Vec<(String, String)>,
+    /// JavaScript snippets injected into every page before its scripts run.
+    ///
+    /// Applied via Servo's `UserContentManager`; take effect on the next load.
+    pub init_scripts: Vec<String>,
+    /// CSS stylesheets injected into every page as user stylesheets.
+    pub init_stylesheets: Vec<String>,
 }
 
 impl Default for PageOptions {
@@ -34,6 +46,10 @@ impl Default for PageOptions {
             wait: 2.0,
             fullpage: false,
             user_agent: None,
+            temporary_storage: false,
+            headers: Vec::new(),
+            init_scripts: Vec::new(),
+            init_stylesheets: Vec::new(),
         }
     }
 }

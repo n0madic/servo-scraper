@@ -80,9 +80,51 @@ struct CliConfig {
     #[bpaf(long("block-urls"), argument("PATTERNS"))]
     block_urls: Option<String>,
 
+    /// Use temporary in-memory storage (clean per-run session)
+    #[bpaf(long("temporary-storage"))]
+    temporary_storage: bool,
+
+    /// Extra HTTP header for navigation, "Name: Value" (repeatable)
+    #[bpaf(long("header"), argument::<String>("HEADER"), many)]
+    header: Vec<String>,
+
+    /// Block requests by resource type: image, font, script, stylesheet,
+    /// media, document, frame, object, embed, track, worker (repeatable)
+    #[bpaf(long("block-resource-type"), argument::<String>("TYPE"), many)]
+    block_resource_type: Vec<String>,
+
+    /// Inject a JS file into every page before its scripts run (repeatable)
+    #[bpaf(long("init-script"), argument::<String>("PATH"), many)]
+    init_script: Vec<String>,
+
+    /// Inject a CSS file into every page as a user stylesheet (repeatable)
+    #[bpaf(long("init-style"), argument::<String>("PATH"), many)]
+    init_style: Vec<String>,
+
     /// URL to load
     #[bpaf(positional::<String>("URL"), parse(parse_url))]
     url: Url,
+}
+
+/// Parse a `"Name: Value"` header line into a `(name, value)` pair.
+fn parse_header(line: &str) -> Result<(String, String), String> {
+    let (name, value) = line
+        .split_once(':')
+        .ok_or_else(|| format!("invalid header (expected 'Name: Value'): {line}"))?;
+    Ok((name.trim().to_string(), value.trim().to_string()))
+}
+
+/// Read each path into a string, exiting on failure.
+fn read_files(paths: &[String], kind: &str) -> Vec<String> {
+    paths
+        .iter()
+        .map(|path| {
+            std::fs::read_to_string(path).unwrap_or_else(|e| {
+                eprintln!("Error: failed to read {kind} file {path}: {e}");
+                process::exit(1);
+            })
+        })
+        .collect()
 }
 
 fn parse_url(s: String) -> Result<Url, String> {
@@ -107,6 +149,17 @@ fn main() {
         process::exit(1);
     }
 
+    let headers: Vec<(String, String)> = config
+        .header
+        .iter()
+        .map(|h| {
+            parse_header(h).unwrap_or_else(|e| {
+                eprintln!("Error: {e}");
+                process::exit(1);
+            })
+        })
+        .collect();
+
     let options = PageOptions {
         width: config.width,
         height: config.height,
@@ -114,6 +167,10 @@ fn main() {
         wait: config.wait,
         fullpage: config.fullpage,
         user_agent: config.user_agent.clone(),
+        temporary_storage: config.temporary_storage,
+        headers,
+        init_scripts: read_files(&config.init_script, "init-script"),
+        init_stylesheets: read_files(&config.init_style, "init-style"),
     };
 
     let mut engine = PageEngine::new(options).unwrap_or_else(|e| {
@@ -121,20 +178,27 @@ fn main() {
         process::exit(1);
     });
 
-    // If block-urls requested, create the page explicitly so patterns are
-    // in place *before* the first navigation.
-    if let Some(ref patterns_str) = config.block_urls {
+    // If request blocking is requested, create the page explicitly so the
+    // patterns/destinations are in place *before* the first navigation.
+    if config.block_urls.is_some() || !config.block_resource_type.is_empty() {
         let id = engine.new_page().unwrap_or_else(|e| {
             eprintln!("Error: failed to create page: {e}");
             process::exit(1);
         });
         engine.switch_to(id).unwrap();
-        let patterns: Vec<String> = patterns_str
-            .split(',')
-            .map(|s| s.trim().to_string())
-            .filter(|s| !s.is_empty())
-            .collect();
-        engine.block_urls(patterns);
+
+        if let Some(ref patterns_str) = config.block_urls {
+            let patterns: Vec<String> = patterns_str
+                .split(',')
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+                .collect();
+            engine.block_urls(patterns);
+        }
+
+        if !config.block_resource_type.is_empty() {
+            engine.block_resource_type_names(&config.block_resource_type);
+        }
     }
 
     eprintln!("Loading {}...", config.url);

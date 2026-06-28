@@ -10,7 +10,7 @@
  * The page handle internally runs Servo on a dedicated thread.
  *
  * Usage:
- *   ServoPage *p = page_new(1280, 720, 30, 2.0, 0, NULL);
+ *   ServoPage *p = page_new(1280, 720, 30, 2.0, 0, NULL, 0);
  *   page_open(p, "https://example.com");
  *   uint8_t *png; size_t png_len;
  *   if (page_screenshot(p, &png, &png_len) == PAGE_OK) {
@@ -56,10 +56,13 @@ typedef struct ServoPage ServoPage;
  * @param wait       Post-load JS settle time in seconds.
  * @param fullpage   Non-zero to capture full scrollable page.
  * @param user_agent Custom User-Agent string, or NULL for default.
+ * @param temporary_storage Non-zero for a clean per-run session (in-memory
+ *                   storage; cookies/storage do not persist to disk).
  * @return Opaque handle, or NULL on failure. Must be freed with page_free().
  */
 ServoPage *page_new(uint32_t width, uint32_t height, uint64_t timeout,
-                     double wait, int fullpage, const char *user_agent);
+                     double wait, int fullpage, const char *user_agent,
+                     int temporary_storage);
 
 /**
  * Destroy a page instance. Safe to call with NULL.
@@ -259,6 +262,33 @@ int page_clear_cookies(ServoPage *page);
  * Set URL patterns to block (comma-separated). Pass NULL to clear.
  */
 int page_block_urls(ServoPage *page, const char *patterns);
+
+/**
+ * Block requests by resource type (comma-separated names, e.g. "image,font").
+ * Recognized: image, font, script, stylesheet, media, document, frame, object,
+ * embed, track, worker. Pass NULL to clear.
+ */
+int page_block_resource_types(ServoPage *page, const char *types);
+
+/* ── Navigation headers ────────────────────────────────────────────── */
+
+/**
+ * Set extra HTTP headers for subsequent navigations. `headers` is a
+ * newline-separated list of "Name: Value" lines. Pass NULL to clear.
+ */
+int page_set_headers(ServoPage *page, const char *headers);
+
+/* ── User content (init scripts / stylesheets) ─────────────────────── */
+
+/**
+ * Inject a JavaScript snippet into every page (takes effect on next load).
+ */
+int page_add_init_script(ServoPage *page, const char *script);
+
+/**
+ * Inject a CSS user stylesheet into every page (takes effect on next load).
+ */
+int page_add_init_stylesheet(ServoPage *page, const char *css);
 
 /* ── Navigation (extended) ─────────────────────────────────────────── */
 

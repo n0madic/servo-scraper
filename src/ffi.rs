@@ -59,6 +59,8 @@ unsafe fn write_string_out(s: String, out_ptr: *mut *mut std::ffi::c_char, out_l
 /// The caller must free it with `page_free()`.
 ///
 /// `user_agent` may be NULL to use the default User-Agent.
+/// `temporary_storage` (non-zero) uses in-memory storage for a clean per-run
+/// session (cookies/storage do not persist to disk).
 ///
 /// # Safety
 ///
@@ -72,6 +74,7 @@ pub unsafe extern "C" fn page_new(
     wait: f64,
     fullpage: i32,
     user_agent: *const std::ffi::c_char,
+    temporary_storage: i32,
 ) -> *mut Page {
     let ua = if user_agent.is_null() {
         None
@@ -88,6 +91,8 @@ pub unsafe extern "C" fn page_new(
         wait,
         fullpage: fullpage != 0,
         user_agent: ua,
+        temporary_storage: temporary_storage != 0,
+        ..Default::default()
     };
     match Page::new(options) {
         Ok(p) => Box::into_raw(Box::new(p)),
@@ -798,6 +803,127 @@ pub unsafe extern "C" fn page_block_urls(
             .collect();
         page.block_urls(pats);
     }
+    PAGE_OK
+}
+
+/// Block requests by resource type (comma-separated names, e.g. `"image,font"`).
+/// Recognized names: image, font, script, stylesheet, media, document, frame,
+/// object, embed, track, worker. Pass NULL to clear.
+///
+/// # Safety
+///
+/// `page` must be a valid pointer. `types` may be NULL.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn page_block_resource_types(
+    page: *mut Page,
+    types: *const std::ffi::c_char,
+) -> i32 {
+    if page.is_null() {
+        return PAGE_ERR_NULL_PTR;
+    }
+    let page = unsafe { &*page };
+    if types.is_null() {
+        page.clear_blocked_resource_types();
+    } else {
+        let types_str = match unsafe { std::ffi::CStr::from_ptr(types) }.to_str() {
+            Ok(s) => s,
+            Err(_) => return PAGE_ERR_JS,
+        };
+        let names: Vec<String> = types_str
+            .split(',')
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .collect();
+        page.block_resource_types(names);
+    }
+    PAGE_OK
+}
+
+// -- Navigation headers FFI --
+
+/// Set extra HTTP headers for subsequent navigations.
+///
+/// `headers` is a newline-separated list of `"Name: Value"` lines. Pass NULL to
+/// clear all headers.
+///
+/// # Safety
+///
+/// `page` must be a valid pointer. `headers` may be NULL.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn page_set_headers(
+    page: *mut Page,
+    headers: *const std::ffi::c_char,
+) -> i32 {
+    if page.is_null() {
+        return PAGE_ERR_NULL_PTR;
+    }
+    let page = unsafe { &*page };
+    if headers.is_null() {
+        page.set_headers(Vec::new());
+        return PAGE_OK;
+    }
+    let headers_str = match unsafe { std::ffi::CStr::from_ptr(headers) }.to_str() {
+        Ok(s) => s,
+        Err(_) => return PAGE_ERR_JS,
+    };
+    let parsed: Vec<(String, String)> = headers_str
+        .lines()
+        .filter_map(|line| {
+            let line = line.trim();
+            if line.is_empty() {
+                return None;
+            }
+            let (name, value) = line.split_once(':')?;
+            Some((name.trim().to_string(), value.trim().to_string()))
+        })
+        .collect();
+    page.set_headers(parsed);
+    PAGE_OK
+}
+
+// -- User content FFI --
+
+/// Inject a JavaScript snippet into every page (takes effect on next load).
+///
+/// # Safety
+///
+/// `page` and `script` must be valid pointers.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn page_add_init_script(
+    page: *mut Page,
+    script: *const std::ffi::c_char,
+) -> i32 {
+    if page.is_null() || script.is_null() {
+        return PAGE_ERR_NULL_PTR;
+    }
+    let page = unsafe { &*page };
+    let script_str = match unsafe { std::ffi::CStr::from_ptr(script) }.to_str() {
+        Ok(s) => s,
+        Err(_) => return PAGE_ERR_JS,
+    };
+    page.add_init_script(script_str);
+    PAGE_OK
+}
+
+/// Inject a CSS user stylesheet into every page (takes effect on next load).
+///
+/// # Safety
+///
+/// `page` and `css` must be valid pointers.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn page_add_init_stylesheet(
+    page: *mut Page,
+    css: *const std::ffi::c_char,
+) -> i32 {
+    if page.is_null() || css.is_null() {
+        return PAGE_ERR_NULL_PTR;
+    }
+    let page = unsafe { &*page };
+    let css_str = match unsafe { std::ffi::CStr::from_ptr(css) }.to_str() {
+        Ok(s) => s,
+        Err(_) => return PAGE_ERR_JS,
+    };
+    page.add_init_stylesheet(css_str);
     PAGE_OK
 }
 

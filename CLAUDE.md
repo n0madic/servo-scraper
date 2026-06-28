@@ -26,7 +26,7 @@ cargo test          # Run integration tests (~60-90s)
 make test           # Same thing via Makefile
 ```
 
-The integration test suite (`tests/engine_integration.rs`) contains tests covering all public `PageEngine`/`Page` methods — both success and error paths. Tests use a global `Page` singleton (Servo allows only one instance per process) with `data:text/html,...` URIs for fully self-contained, offline, deterministic operation.
+The integration test suite (`tests/engine_integration.rs`) contains tests covering all public `PageEngine`/`Page` methods — both success and error paths. Most tests use a global `Page` singleton (Servo allows only one instance per process) with `data:text/html,...` URIs for fully self-contained, offline, deterministic operation. The native-cookies / custom-headers / resource-blocking / history-traversal tests spin up a local `tiny_http` server on an ephemeral `127.0.0.1` port (real round-trip through Servo's network stack).
 
 Tests must run single-threaded — `.cargo/config.toml` sets `RUST_TEST_THREADS=1` automatically, so plain `cargo test` works.
 
@@ -53,6 +53,10 @@ FFI smoke tests verify the shared library loads and exports the expected symbols
 ./target/release/servo-scraper --user-agent "MyBot/1.0" --eval "navigator.userAgent" https://example.com
 ./target/release/servo-scraper --wait-for-network-idle 500 --screenshot page.png https://example.com
 ./target/release/servo-scraper --block-urls ".png,.jpg,.gif,.svg" --screenshot page.png https://example.com
+./target/release/servo-scraper --block-resource-type image --block-resource-type font --screenshot page.png https://example.com
+./target/release/servo-scraper --header "Authorization: Bearer TOKEN" --eval "document.body.innerText" https://example.com
+./target/release/servo-scraper --init-script inject.js --init-style theme.css --screenshot page.png https://example.com
+./target/release/servo-scraper --temporary-storage --screenshot page.png https://example.com
 ```
 
 ## Architecture
@@ -80,7 +84,7 @@ Three architectural layers (dependency graph: `types ← engine ← page ← ffi
 
 | Method | Description |
 |---|---|
-| `new(options)` | Initialize engine/page (`PageOptions.user_agent` sets custom UA) |
+| `new(options)` | Initialize engine/page (`PageOptions`: `user_agent`, `temporary_storage`, `headers`, `init_scripts`, `init_stylesheets`) |
 | `open(url)` | Navigate to URL (creates or reuses WebView) |
 | `evaluate(script)` | Run JS, return result as JSON string |
 | `screenshot()` | Viewport screenshot (PNG bytes) |
@@ -89,11 +93,16 @@ Three architectural layers (dependency graph: `types ← engine ← page ← ffi
 | `url()` / `title()` | Get current URL / page title |
 | `console_messages()` | Drain captured console messages |
 | `network_requests()` | Drain captured network requests |
-| `get_cookies()` | Get cookies via `document.cookie` |
-| `set_cookie(cookie)` | Set a cookie via `document.cookie` |
-| `clear_cookies()` | Clear all cookies by expiring them |
+| `get_cookies()` | Get cookies via Servo's native cookie store (includes `HttpOnly`) |
+| `set_cookie(cookie)` | Set a cookie via `SiteDataManager::set_cookie_for_url` |
+| `clear_cookies()` | Clear all cookies via `SiteDataManager::clear_cookies` (includes `HttpOnly`) |
 | `block_urls(patterns)` | Block requests whose URL contains any pattern |
 | `clear_blocked_urls()` | Clear all blocked URL patterns |
+| `block_resource_types(types)` / `block_resource_type_names(names)` | Block requests by `Destination` (image/font/script/stylesheet/media/...) |
+| `clear_blocked_resource_types()` | Clear all blocked resource-type destinations |
+| `set_headers(headers)` | Set extra HTTP headers for subsequent navigations (`load_request`) |
+| `add_init_script(js)` | Inject JS into every page (takes effect on next load) |
+| `add_init_stylesheet(css)` | Inject a CSS user stylesheet into every page (next load) |
 | `reload()` | Reload the current page |
 | `go_back()` | Navigate back (returns `false` if no history) |
 | `go_forward()` | Navigate forward (returns `false` if no forward history) |
@@ -133,12 +142,16 @@ Three architectural layers (dependency graph: `types ← engine ← page ← ffi
 
 - **Multi-page architecture** — `PageEngine` maintains a `HashMap<u32, PageState>` of pages, each with its own `WebView`, `SoftwareRenderingContext`, and `PageDelegate`. This provides per-page isolation of console messages, network requests, blocked URL patterns, viewport size, and screenshots. An active-page model means all existing methods (`evaluate`, `screenshot`, `html`, etc.) target the current active page. Auto-incrementing `u32` IDs identify pages (simple for FFI). `open()` with no pages auto-creates page 0 for backward compatibility.
 - **Popup handling** — Opt-in via `set_popup_handling(true)`. When enabled, `WebViewDelegate::request_create_new` creates popup WebViews and buffers them. `popup_pages()` drains the buffer and assigns IDs. When disabled (default), popup requests are dropped (blocked).
-- **Persistent WebView** — WebView is created on first `open()` and reused for subsequent navigations via `WebView::load()`.
-- **PageDelegate** captures console messages (`show_console_message`), network requests (`load_web_resource`), blocks URLs via `blocked_url_patterns` using `WebResourceLoad::intercept().cancel()`, and auto-dismisses dialogs (`show_embedder_control`).
+- **Persistent WebView** — WebView is created on first `open()` and reused for subsequent navigations. When navigation headers are set the new/existing WebView is driven via `WebView::load_request(UrlRequest)`; otherwise `WebView::load(url)`.
+- **PageDelegate** captures console messages (`show_console_message`), network requests (`load_web_resource`), blocks requests by URL substring (`blocked_url_patterns`) **and** by `Destination` (`blocked_destinations`) using `WebResourceLoad::intercept().cancel()`, auto-dismisses dialogs (`show_embedder_control`), and tracks history traversal completion (`notify_traversal_complete`). Blocked requests are cancelled and **omitted** from `network_requests()` (but still update `last_request_time` for idle detection).
 - **User-Agent** is set via `ServoBuilder::preferences(Preferences { user_agent })` when `PageOptions.user_agent` is `Some`.
-- **Cookies** use JS `document.cookie` (limitation: cannot access HttpOnly cookies).
+- **Cookies** use Servo's network-layer cookie store via `servo.site_data_manager()`: `get_cookies()` → `cookies_for_url(url, CookieSource::HTTP)` (includes `HttpOnly`), `set_cookie()` → `cookie::Cookie::parse` + `set_cookie_for_url(url, cookie, None)`, `clear_cookies()` → `clear_cookies(None)`. The `None`-callback paths are synchronous (resource-thread sync IPC, no event-loop spin). No more `document.cookie` JS hacks.
+- **Navigation headers** — `PageOptions.headers` (and runtime `set_headers`) are stored on `PageEngine` and converted to an `http::HeaderMap` per navigation; applied via `UrlRequest::new(url).headers(map)` + `load_request`.
+- **Resource-type blocking** — `block_resource_types`/`block_resource_type_names` set `Destination`s on the active `PageDelegate`. `parse_resource_types` maps user names (`image`→Image, `font`, `script`, `stylesheet`/`style`/`css`→Style, `media`→Audio+Video, `document`, `frame`/`iframe`, ...) from `content_security_policy::Destination`. `WebResourceRequest.destination` is matched in `load_web_resource`.
+- **Init scripts / stylesheets** — a shared `Rc<UserContentManager>` (created in `PageEngine::new`, attached to every WebView in `open()` via `.user_content_manager(...)`) injects `PageOptions.init_scripts`/`init_stylesheets` and runtime `add_init_script`/`add_init_stylesheet`. Per Servo semantics, mutations take effect on the next load/reload. Stylesheet base URLs are synthesized (`https://servo-scraper.invalid/...`).
+- **Temporary storage** — `PageOptions.temporary_storage` sets `ServoBuilder::opts(Opts { temporary_storage: true, .. })` for an in-memory, non-persistent session.
 - **Element info** methods use JS `querySelector` + `getBoundingClientRect`/`textContent`/`getAttribute`/`outerHTML`.
-- **Navigation** uses native `WebView::reload()`, `go_back(1)`, `go_forward(1)` with `can_go_back()`/`can_go_forward()` checks.
+- **Navigation** uses native `WebView::reload()`, `go_back(1)`, `go_forward(1)` with `can_go_back()`/`can_go_forward()` checks. `go_back`/`go_forward` wait on `notify_traversal_complete` **or** `LoadStatus::Complete` (the traversal signal fixes hangs on `data:` URIs, where Servo does not re-fire `Complete` for history navigation).
 - **Servo runs headless** using `SoftwareRenderingContext` — no GPU or display server needed.
 - **Resources are embedded** via Servo's `baked-in-resources` feature (the `servo-default-resources` crate) — the binary is self-contained, no external resource directory needed.
 - **Stderr is suppressed** during Servo rendering via fd-level `dup2` to `/dev/null` (to hide macOS OpenGL noise).
@@ -157,7 +170,8 @@ Three architectural layers (dependency graph: `types ← engine ← page ← ffi
 
 - `page_screenshot` / `page_screenshot_fullpage` return a heap-allocated `Box<[u8]>` — caller frees with `page_buffer_free(data, len)`.
 - All string-returning functions (`page_html`, `page_evaluate`, `page_url`, `page_title`, `page_console_messages`, `page_network_requests`, `page_get_cookies`, `page_element_rect`, `page_element_text`, `page_element_attribute`, `page_element_html`, `page_page_ids`, `page_popup_pages`, `page_page_url`, `page_page_title`) return a `CString` — caller frees with `page_string_free(ptr)`.
-- `page_new` takes a 6th `user_agent` parameter (`*const c_char`, NULL = default).
+- `page_new` takes 7 parameters: `width, height, timeout, wait, fullpage, user_agent` (`*const c_char`, NULL = default), `temporary_storage` (`int`, non-zero = in-memory session).
+- Runtime configuration FFI (apply before `page_open`): `page_set_headers(page, "Name: Value\nName2: Value2")` (NULL clears), `page_block_resource_types(page, "image,font")` (NULL clears), `page_add_init_script(page, js)`, `page_add_init_stylesheet(page, css)`.
 - All FFI functions are NULL-safe and return `PAGE_ERR_NULL_PTR` (7) for null arguments.
 
 ### Error Codes
@@ -180,6 +194,10 @@ Three architectural layers (dependency graph: `types ← engine ← page ← ffi
 - **Servo** is a crates.io dependency (`servo = "0.3.0"`, features `baked-in-resources` + `js_jit`, `default-features = false`). Servo publishes monthly releases plus an LTS line; bump the version in `Cargo.toml` to update.
 - **serde** + **serde_json** for JSON serialization (console messages, network requests, JS results).
 - **base64** for encoding file data in `set_input_files()`.
+- **cookie** (`0.18`) for parsing/constructing `Cookie<'static>` for `set_cookie_for_url` (not re-exported from servo).
+- **http** (`1.4`) for `http::HeaderMap` used by `UrlRequest::headers()` (version must match Servo's).
+- **content-security-policy** (`0.8.0`, `serde` feature) for the `Destination` enum used in resource-type blocking.
+- **tiny_http** (dev-dependency) for the local HTTP server in cookie/header/blocking/traversal integration tests.
 - Requires Rust 1.88+ (edition 2024).
 - Release profile: LTO enabled, single codegen unit, `opt-level = "z"`, stripped, `panic = "abort"`.
 

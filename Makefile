@@ -59,6 +59,10 @@ test-python: build-lib
 		assert lib.page_screenshot, 'page_screenshot not found'; \
 		assert lib.page_html, 'page_html not found'; \
 		assert lib.page_evaluate, 'page_evaluate not found'; \
+		assert lib.page_set_headers, 'page_set_headers not found'; \
+		assert lib.page_block_resource_types, 'page_block_resource_types not found'; \
+		assert lib.page_add_init_script, 'page_add_init_script not found'; \
+		assert lib.page_add_init_stylesheet, 'page_add_init_stylesheet not found'; \
 		print('Python: loaded libservo_scraper.$(DYLIB_EXT), all FFI symbols found')"
 
 # Install JS dependencies and verify the library can be loaded
@@ -67,7 +71,9 @@ test-js: build-lib
 	NODE_PATH=examples/js/node_modules node -e "\
 		const koffi = require('koffi'); \
 		const lib = koffi.load('$(RELEASE_DIR)/libservo_scraper.$(DYLIB_EXT)'); \
-		const f = lib.func('void *page_new(uint32_t, uint32_t, uint64_t, double, int)'); \
+		const f = lib.func('void *page_new(uint32_t, uint32_t, uint64_t, double, int, const char *, int)'); \
+		const h = lib.func('int page_set_headers(void *, const char *)'); \
+		const b = lib.func('int page_block_resource_types(void *, const char *)'); \
 		console.log('Node.js: loaded libservo_scraper.$(DYLIB_EXT) via koffi, FFI binding OK');"
 
 # Build the Go example against the shared library

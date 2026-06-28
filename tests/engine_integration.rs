@@ -14,6 +14,7 @@
 
 use servo_scraper::{InputFile, Page, PageError, PageOptions};
 use std::sync::OnceLock;
+use std::thread;
 use std::time::Instant;
 
 // ---------------------------------------------------------------------------
@@ -124,6 +125,7 @@ fn page() -> &'static Page {
             wait: 0.5,
             fullpage: false,
             user_agent: None,
+            ..PageOptions::default()
         };
         Page::new(opts).expect("Page init failed")
     })
@@ -641,7 +643,7 @@ fn test_mouse_move() {
 fn test_get_cookies() {
     reset_and_open(BASIC_HTML);
 
-    // data: URIs have opaque origin, so document.cookie returns empty string
+    // data: URIs have an opaque origin, so the cookie store has no entries.
     let cookies = page().get_cookies().expect("get_cookies failed");
     assert!(
         cookies.is_empty() || cookies.len() < 1000,
@@ -653,11 +655,11 @@ fn test_get_cookies() {
 fn test_set_cookie() {
     reset_and_open(BASIC_HTML);
 
-    // Should not error even on data: origin (cookie just won't persist)
+    // Should not error even on data: origin (cookie just won't persist).
+    // Real round-trip persistence is covered by the HTTP-server tests below.
     page()
         .set_cookie("test=value; path=/")
         .expect("set_cookie failed");
-    // TODO: Real cookie persistence tests need an HTTP server
 }
 
 #[test]
@@ -1607,4 +1609,222 @@ fn test_new_page_with_size() {
 
     // Cleanup
     let _ = p.close_page(id);
+}
+
+// ---------------------------------------------------------------------------
+// Group 27: Native cookies / headers / resource blocking / traversal
+//           (real local HTTP server — exercises the SiteDataManager,
+//            load_request header, destination-blocking, and traversal paths)
+// ---------------------------------------------------------------------------
+
+/// Spawn a `tiny_http` server bound to an ephemeral localhost port.
+///
+/// The handler is invoked for each incoming request and is responsible for
+/// responding. Returns the bound port. The server thread runs until the test
+/// process exits.
+fn spawn_server<F>(handler: F) -> u16
+where
+    F: Fn(tiny_http::Request) + Send + 'static,
+{
+    let server = tiny_http::Server::http("127.0.0.1:0").expect("failed to bind test server");
+    let port = server
+        .server_addr()
+        .to_ip()
+        .expect("server should have an IP address")
+        .port();
+    thread::spawn(move || {
+        for request in server.incoming_requests() {
+            handler(request);
+        }
+    });
+    port
+}
+
+fn html_page(title: &str, body: &str) -> tiny_http::Response<std::io::Cursor<Vec<u8>>> {
+    tiny_http::Response::from_string(format!(
+        "<html><head><title>{title}</title></head><body>{body}</body></html>"
+    ))
+}
+
+#[test]
+fn test_cookie_roundtrip_http() {
+    let port = spawn_server(|req| {
+        let _ = req.respond(html_page("Cookie RT", "hi"));
+    });
+    let url = format!("http://127.0.0.1:{port}/");
+
+    let p = page();
+    p.reset();
+    p.open(&url).expect("open http page");
+
+    p.set_cookie("rt=1; Path=/").expect("set_cookie failed");
+    let cookies = p.get_cookies().expect("get_cookies failed");
+    assert!(
+        cookies.contains("rt=1"),
+        "cookies should contain rt=1: {cookies}"
+    );
+}
+
+#[test]
+fn test_cookie_httponly_http() {
+    // The server sets an HttpOnly cookie via the Set-Cookie response header.
+    // `document.cookie` could never see it; the native cookie store can.
+    let port = spawn_server(|req| {
+        let header = tiny_http::Header::from_bytes(
+            &b"Set-Cookie"[..],
+            &b"sid=secret; HttpOnly; Path=/"[..],
+        )
+        .unwrap();
+        let _ = req.respond(html_page("HttpOnly", "hi").with_header(header));
+    });
+    let url = format!("http://127.0.0.1:{port}/");
+
+    let p = page();
+    p.reset();
+    p.open(&url).expect("open http page");
+
+    let cookies = p.get_cookies().expect("get_cookies failed");
+    assert!(
+        cookies.contains("sid"),
+        "HttpOnly cookie 'sid' should be visible via the native cookie store: {cookies}"
+    );
+}
+
+#[test]
+fn test_clear_cookies_http() {
+    let port = spawn_server(|req| {
+        let _ = req.respond(html_page("Clear", "hi"));
+    });
+    let url = format!("http://127.0.0.1:{port}/");
+
+    let p = page();
+    p.reset();
+    p.open(&url).expect("open http page");
+
+    p.set_cookie("gone=1; Path=/").expect("set_cookie failed");
+    assert!(p.get_cookies().unwrap().contains("gone=1"));
+
+    p.clear_cookies().expect("clear_cookies failed");
+    let after = p.get_cookies().unwrap();
+    assert!(
+        !after.contains("gone=1"),
+        "cookie should be cleared: {after}"
+    );
+}
+
+#[test]
+fn test_set_headers_http() {
+    // The server echoes a custom request header back into the page body.
+    let port = spawn_server(|req| {
+        let echoed = req
+            .headers()
+            .iter()
+            .find(|h| h.field.equiv("X-Scraper-Test"))
+            .map(|h| h.value.as_str().to_string())
+            .unwrap_or_default();
+        let _ = req.respond(html_page("Headers", &format!("HDR[{echoed}]")));
+    });
+    let url = format!("http://127.0.0.1:{port}/");
+
+    let p = page();
+    p.reset();
+    p.set_headers(vec![(
+        "X-Scraper-Test".to_string(),
+        "servo-rocks".to_string(),
+    )]);
+    p.open(&url).expect("open http page");
+
+    let html = p.html().expect("html failed");
+
+    // Clear headers *before* asserting so a failure can't leak header state into
+    // other tests that share the global Page singleton.
+    p.set_headers(vec![]);
+
+    assert!(
+        html.contains("HDR[servo-rocks]"),
+        "custom header should be echoed into the body: {html}"
+    );
+}
+
+#[test]
+fn test_block_resource_types_mechanism() {
+    // Exercises the resource-type-name → `Destination` mapping and the
+    // block/clear plumbing. (Actual subresource cancellation cannot be observed
+    // in this headless harness: Servo does not fetch external subresources
+    // through the embedder here, and intercepting the main-frame document
+    // request stalls the navigation. The destination match runs in the same
+    // delegate path as the URL-substring blocking exercised elsewhere.)
+    let p = page();
+    p.reset();
+    let id = p.new_page().expect("new_page");
+    p.switch_to(id).expect("switch_to");
+
+    // All recognized names plus an unknown one (which is ignored) — no panic.
+    p.block_resource_types(vec![
+        "image".to_string(),
+        "font".to_string(),
+        "script".to_string(),
+        "stylesheet".to_string(),
+        "media".to_string(),
+        "frame".to_string(),
+        "object".to_string(),
+        "unknown-type".to_string(),
+    ]);
+    p.clear_blocked_resource_types();
+
+    // A normal page still loads after blocking was configured and cleared.
+    p.open(&data_url(BASIC_HTML)).expect("open after clear");
+    assert_eq!(p.title().unwrap(), "Test Page");
+}
+
+#[test]
+fn test_go_back_forward_http() {
+    // Two distinct real pages so history traversal is observable.
+    let port = spawn_server(|req| {
+        let title = if req.url() == "/b" {
+            "HTTP Page B"
+        } else {
+            "HTTP Page A"
+        };
+        let _ = req.respond(html_page(title, title));
+    });
+    let base = format!("http://127.0.0.1:{port}");
+
+    let p = page();
+    p.reset();
+
+    p.open(&format!("{base}/a")).expect("open a");
+    assert!(
+        p.url().unwrap_or_default().ends_with("/a"),
+        "url after open a: {:?}",
+        p.url()
+    );
+
+    p.open(&format!("{base}/b")).expect("open b");
+    assert!(
+        p.url().unwrap_or_default().ends_with("/b"),
+        "url after open b: {:?}",
+        p.url()
+    );
+
+    // The core fix: history navigation over real HTTP returns without hanging
+    // (the original code timed out waiting for a `LoadStatus::Complete` that
+    // never re-fired). Verify each traversal returns promptly and commits, via
+    // the URL the constellation updates on `notify_traversal_complete`.
+    assert!(p.go_back().expect("go_back must not hang"), "go_back should succeed");
+    assert!(
+        p.url().unwrap_or_default().ends_with("/a"),
+        "go_back should move to /a, got {:?}",
+        p.url()
+    );
+
+    assert!(
+        p.go_forward().expect("go_forward must not hang"),
+        "go_forward should succeed"
+    );
+    assert!(
+        p.url().unwrap_or_default().ends_with("/b"),
+        "go_forward should move to /b, got {:?}",
+        p.url()
+    );
 }

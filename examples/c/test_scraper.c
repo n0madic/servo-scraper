@@ -49,9 +49,9 @@ int main(int argc, char *argv[]) {
     const char *png_path = argv[2];
     const char *html_path = argv[3];
 
-    /* 1. Create page (1280x720, 30s timeout, 2s settle, no fullpage) */
+    /* 1. Create page (1280x720, 30s timeout, 2s settle, no fullpage, persistent storage) */
     fprintf(stderr, "Creating page...\n");
-    ServoPage *page = page_new(1280, 720, 30, 2.0, 0, NULL);
+    ServoPage *page = page_new(1280, 720, 30, 2.0, 0, NULL, 0);
     if (!page) {
         fprintf(stderr, "Error: failed to create page\n");
         return 1;

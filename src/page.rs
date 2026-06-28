@@ -138,6 +138,27 @@ enum Command {
     ClearBlockedUrls {
         response: mpsc::Sender<()>,
     },
+    BlockResourceTypes {
+        types: Vec<String>,
+        response: mpsc::Sender<()>,
+    },
+    ClearBlockedResourceTypes {
+        response: mpsc::Sender<()>,
+    },
+    // Navigation headers
+    SetHeaders {
+        headers: Vec<(String, String)>,
+        response: mpsc::Sender<()>,
+    },
+    // User content
+    AddInitScript {
+        script: String,
+        response: mpsc::Sender<()>,
+    },
+    AddInitStylesheet {
+        css: String,
+        response: mpsc::Sender<()>,
+    },
     // Navigation
     Reload {
         response: mpsc::Sender<Result<(), PageError>>,
@@ -356,6 +377,26 @@ impl Page {
                     }
                     Command::ClearBlockedUrls { response } => {
                         engine.clear_blocked_urls();
+                        let _ = response.send(());
+                    }
+                    Command::BlockResourceTypes { types, response } => {
+                        engine.block_resource_type_names(&types);
+                        let _ = response.send(());
+                    }
+                    Command::ClearBlockedResourceTypes { response } => {
+                        engine.clear_blocked_resource_types();
+                        let _ = response.send(());
+                    }
+                    Command::SetHeaders { headers, response } => {
+                        engine.set_headers(headers);
+                        let _ = response.send(());
+                    }
+                    Command::AddInitScript { script, response } => {
+                        engine.add_init_script(script);
+                        let _ = response.send(());
+                    }
+                    Command::AddInitStylesheet { css, response } => {
+                        engine.add_init_stylesheet(css);
                         let _ = response.send(());
                     }
                     Command::Reload { response } => {
@@ -619,6 +660,38 @@ impl Page {
 
     pub fn clear_blocked_urls(&self) {
         let _ = self.send_cmd(|response| Command::ClearBlockedUrls { response });
+    }
+
+    /// Block requests by resource-type name (`"image"`, `"font"`, `"script"`,
+    /// `"stylesheet"`, `"media"`, `"document"`, ...). Requires an active page.
+    pub fn block_resource_types(&self, types: Vec<String>) {
+        let _ = self.send_cmd(|response| Command::BlockResourceTypes { types, response });
+    }
+
+    /// Clear all blocked resource-type destinations.
+    pub fn clear_blocked_resource_types(&self) {
+        let _ = self.send_cmd(|response| Command::ClearBlockedResourceTypes { response });
+    }
+
+    /// Set the extra HTTP headers sent on subsequent navigations.
+    pub fn set_headers(&self, headers: Vec<(String, String)>) {
+        let _ = self.send_cmd(|response| Command::SetHeaders { headers, response });
+    }
+
+    /// Inject a JavaScript snippet into every page (takes effect on next load).
+    pub fn add_init_script(&self, script: &str) {
+        let _ = self.send_cmd(|response| Command::AddInitScript {
+            script: script.to_string(),
+            response,
+        });
+    }
+
+    /// Inject a CSS user stylesheet into every page (takes effect on next load).
+    pub fn add_init_stylesheet(&self, css: &str) {
+        let _ = self.send_cmd(|response| Command::AddInitStylesheet {
+            css: css.to_string(),
+            response,
+        });
     }
 
     pub fn reload(&self) -> Result<(), PageError> {

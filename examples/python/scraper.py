@@ -75,9 +75,9 @@ def load_library(lib_path):
     """Load the shared library and set up function signatures."""
     lib = ctypes.CDLL(lib_path)
 
-    # page_new(width, height, timeout, wait, fullpage, user_agent) -> *ServoPage
+    # page_new(width, height, timeout, wait, fullpage, user_agent, temporary_storage) -> *ServoPage
     lib.page_new.restype = c_void_p
-    lib.page_new.argtypes = [c_uint32, c_uint32, c_uint64, c_double, c_int, c_char_p]
+    lib.page_new.argtypes = [c_uint32, c_uint32, c_uint64, c_double, c_int, c_char_p, c_int]
 
     # page_free(page)
     lib.page_free.restype = None
@@ -175,6 +175,22 @@ def load_library(lib_path):
     lib.page_block_urls.restype = c_int
     lib.page_block_urls.argtypes = [c_void_p, c_char_p]
 
+    # page_block_resource_types(page, types) -> int
+    lib.page_block_resource_types.restype = c_int
+    lib.page_block_resource_types.argtypes = [c_void_p, c_char_p]
+
+    # page_set_headers(page, headers) -> int
+    lib.page_set_headers.restype = c_int
+    lib.page_set_headers.argtypes = [c_void_p, c_char_p]
+
+    # page_add_init_script(page, script) -> int
+    lib.page_add_init_script.restype = c_int
+    lib.page_add_init_script.argtypes = [c_void_p, c_char_p]
+
+    # page_add_init_stylesheet(page, css) -> int
+    lib.page_add_init_stylesheet.restype = c_int
+    lib.page_add_init_stylesheet.argtypes = [c_void_p, c_char_p]
+
     # page_reload(page) -> int
     lib.page_reload.restype = c_int
     lib.page_reload.argtypes = [c_void_p]
@@ -232,9 +248,9 @@ def main():
     lib_path = find_library()
     lib = load_library(lib_path)
 
-    # 1. Create page
+    # 1. Create page (last arg: temporary_storage = 0 for persistent storage)
     print("Creating page...", file=sys.stderr)
-    page = lib.page_new(1280, 720, 30, 2.0, 0, None)
+    page = lib.page_new(1280, 720, 30, 2.0, 0, None, 0)
     if not page:
         print("Error: failed to create page", file=sys.stderr)
         sys.exit(1)
