@@ -247,7 +247,7 @@ int page_set_input_files(ServoPage *page, const char *selector, const char *path
 int page_get_cookies(ServoPage *page, char **out_cookies, size_t *out_len);
 
 /**
- * Set a cookie via document.cookie.
+ * Set a cookie via Servo's native cookie store (best-effort; invalid cookies ignored).
  */
 int page_set_cookie(ServoPage *page, const char *cookie);
 

@@ -125,7 +125,7 @@ Three architectural layers (dependency graph: `types ← engine ← page ← ffi
 | `select_option(css, value)` | Select `<select>` option by value, fires change event |
 | `set_input_files(css, files)` | Set files on `<input type="file">` via DataTransfer API |
 | `close()` | Drop the active page's WebView |
-| `reset()` | Drop all pages + clear blocked URLs, console messages, network requests |
+| `reset()` | Drop all pages + clear blocked URLs, console messages, network requests, and navigation headers (init scripts/UA persist) |
 | `new_page()` | Create a new page with default viewport, return its ID |
 | `new_page_with_size(w, h)` | Create a new page with custom viewport size |
 | `switch_to(page_id)` | Switch the active page |

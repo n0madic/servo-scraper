@@ -698,7 +698,7 @@ pub struct PageEngine {
     /// Extra HTTP headers applied to subsequent navigations.
     headers: Vec<(String, String)>,
     /// Counter for synthesizing unique user-stylesheet URLs.
-    next_stylesheet_id: Cell<u32>,
+    next_stylesheet_id: u32,
     options: PageOptions,
 }
 
@@ -752,7 +752,7 @@ impl PageEngine {
             popup_enabled: Rc::new(Cell::new(false)),
             user_content_manager,
             headers,
-            next_stylesheet_id: Cell::new(next_stylesheet_id),
+            next_stylesheet_id,
             options,
         })
     }
@@ -765,11 +765,16 @@ impl PageEngine {
         }
         let mut map = HeaderMap::new();
         for (name, value) in &self.headers {
-            if let (Ok(n), Ok(v)) = (
+            match (
                 HeaderName::from_bytes(name.as_bytes()),
                 HeaderValue::from_str(value),
             ) {
-                map.append(n, v);
+                (Ok(n), Ok(v)) => {
+                    map.append(n, v);
+                }
+                _ => {
+                    log::warn!("skipping invalid navigation header {name:?}: {value:?}");
+                }
             }
         }
         if map.is_empty() { None } else { Some(map) }
@@ -908,6 +913,14 @@ impl PageEngine {
                     page.webview = Some(webview);
                 }
                 (false, Some(_)) => {
+                    // The UCM must be attached at build time (Servo exposes no
+                    // post-build setter and the builder has no UrlRequest entry
+                    // point), so it is also active for the initial `about:blank`
+                    // load below. Init scripts therefore run once against that
+                    // throwaway blank document before the real navigation —
+                    // harmless, since the blank document (opaque origin) is
+                    // immediately discarded. Detaching the UCM here would mean
+                    // the real headered load gets no init scripts at all.
                     let webview = WebViewBuilder::new(&self.servo, page.rendering_context.clone())
                         .delegate(page.delegate.clone())
                         .user_content_manager(ucm)
@@ -1100,6 +1113,11 @@ impl PageEngine {
     }
 
     /// Drain and return captured network requests.
+    ///
+    /// Only requests that were allowed to proceed are recorded: requests
+    /// cancelled by `block_urls`/`block_resource_types` are intercepted and
+    /// **omitted** here (they still update the network-idle timestamp). To
+    /// observe a blocked request, check that it is absent from this list.
     pub fn network_requests(&self) -> Vec<NetworkRequest> {
         match self.active_delegate() {
             Ok(delegate) => delegate.network_requests.borrow_mut().drain(..).collect(),
@@ -1114,12 +1132,18 @@ impl PageEngine {
         }
     }
 
-    /// Reset all state: drop all pages, clear popup buffer, reset ID counter.
+    /// Reset all state: drop all pages, clear popup buffer, reset ID counter,
+    /// and clear the runtime navigation headers for a true clean slate.
+    ///
+    /// Note: configured init scripts/stylesheets (on the shared
+    /// `UserContentManager`) and the User-Agent persist — they are engine-level
+    /// configuration set at construction, not per-session state.
     pub fn reset(&mut self) {
         self.pages.clear();
         self.active_page_id = None;
         self.next_page_id = 0;
         self.popup_buffer.borrow_mut().clear();
+        self.headers.clear();
     }
 
     // -- Phase 2: Wait mechanisms --
@@ -1554,9 +1578,14 @@ impl PageEngine {
     /// Get cookies for the current page using Servo's network-layer cookie store.
     ///
     /// Returns a `"name=value; name2=value2"` string. Unlike `document.cookie`,
-    /// this includes `HttpOnly` cookies.
+    /// this includes `HttpOnly` cookies. Errors only if there is no active page;
+    /// a page that has not navigated yet (no current URL) yields an empty string.
     pub fn get_cookies(&self) -> Result<String, PageError> {
-        let url = self.webview()?.url().ok_or(PageError::NoPage)?;
+        // No active page is an error; a page with no current URL has no origin
+        // to query, so it simply has no cookies.
+        let Some(url) = self.webview()?.url() else {
+            return Ok(String::new());
+        };
         let cookies = self
             .servo
             .site_data_manager()
@@ -1572,11 +1601,21 @@ impl PageEngine {
     /// Set a cookie for the current page's URL via the network-layer cookie store.
     ///
     /// Accepts a standard `Set-Cookie`-style string (e.g. `"a=1; Path=/; HttpOnly"`).
+    /// Cookie setting is best-effort, matching `document.cookie` semantics: an
+    /// unparseable cookie or a page with no current URL is logged and ignored
+    /// rather than erroring. Errors only if there is no active page.
     pub fn set_cookie(&self, cookie: &str) -> Result<(), PageError> {
-        let url = self.webview()?.url().ok_or(PageError::NoPage)?;
-        let parsed = Cookie::parse(cookie.to_owned())
-            .map_err(|e| PageError::JsError(format!("invalid cookie: {e}")))?
-            .into_owned();
+        let Some(url) = self.webview()?.url() else {
+            log::warn!("set_cookie ignored: no current page URL");
+            return Ok(());
+        };
+        let parsed = match Cookie::parse(cookie.to_owned()) {
+            Ok(c) => c.into_owned(),
+            Err(e) => {
+                log::warn!("set_cookie ignored: invalid cookie {cookie:?}: {e}");
+                return Ok(());
+            }
+        };
         // The `None` callback uses the synchronous resource-thread path, so the
         // cookie is committed before this returns (set/get messages are ordered).
         self.servo
@@ -1643,16 +1682,16 @@ impl PageEngine {
 
     /// Inject a JavaScript snippet into every page. Takes effect on the next
     /// load or reload (Servo `UserContentManager` semantics).
-    pub fn add_init_script(&self, script: String) {
+    pub fn add_init_script(&mut self, script: String) {
         self.user_content_manager
             .add_script(Rc::new(UserScript::new(script, None)));
     }
 
     /// Inject a CSS user stylesheet into every page. Takes effect on the next
     /// load or reload.
-    pub fn add_init_stylesheet(&self, css: String) {
-        let n = self.next_stylesheet_id.get();
-        self.next_stylesheet_id.set(n + 1);
+    pub fn add_init_stylesheet(&mut self, css: String) {
+        let n = self.next_stylesheet_id;
+        self.next_stylesheet_id += 1;
         self.user_content_manager
             .add_stylesheet(Rc::new(UserStyleSheet::new(css, synthetic_stylesheet_url(n))));
     }

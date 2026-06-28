@@ -735,7 +735,10 @@ pub unsafe extern "C" fn page_get_cookies(
     }
 }
 
-/// Set a cookie via `document.cookie`.
+/// Set a cookie for the current page via Servo's native cookie store.
+///
+/// Best-effort: an unparseable cookie is ignored (logged), matching
+/// `document.cookie` semantics.
 ///
 /// # Safety
 ///
